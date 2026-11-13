@@ -23,7 +23,7 @@ repo holds only the firmware and the upstream-ready port.
 
 | Path | What it is | Upstream? |
 |---|---|---|
-| `rind/` | Submodule: upstream [`kixel-ai/rind`](https://github.com/kixel-ai/rind) (`moq-dev/rind` redirects), pinned at `0b1f1469` (2026-11-13) | upstream |
+| `rind/` | Submodule: upstream [`kixel-ai/rind`](https://github.com/kixel-ai/rind) (`moq-dev/rind` redirects), pinned at `d6ca9a75` (OPRF, 2026-11-13) | upstream |
 | `patches/` | `git format-patch` series that `apply-patches` commits onto the submodule. Base patches `0001`–`0005` are required. Optional sets live in `patches/<name>/`, numbered from `0001` in that directory, and are applied with `--set <name>`. Ring vendor patches are unnumbered | **the upstream PR** |
 | `nrf52840/` | The nRF52840 (T1000-E) firmware, `thumbv7em-none-eabihf` | [nrf52840/README.md](nrf52840/README.md) |
 | `rp2040/` | The RP2040 (Pico) firmware, `thumbv6m-none-eabi`; builds; known-answer checks passed on a Pico | [rp2040/README.md](rp2040/README.md) |
@@ -135,8 +135,11 @@ and the committer is fixed (`steelhead99x`, `commit.gpgsign=false`,
 `--no-gpg-sign`, `--no-signoff`, `i18n.commitEncoding=utf-8`,
 `--committer-date-is-author-date`), so a machine whose git signs commits does
 not produce a different id. On this pin the base series is
-`8f162d6a9602b89697b50ad251bedec67cb4a0f1`. With the `poly1305-32` set on
-top, the fork commit is `270619bc0200ebfd112b9dade05786d8ed9a67d0`. A patch
+`eb053e787735b1898fa64ebc91ae13b31db663ec`. With the `poly1305-32` set on
+top, the fork commit is `29cc4b2d16bb09ea2ba065191a941723c79f9032`.
+History: on `0b1f1469c8e17e361e3353432bc7fceee9e04214` those unsigned fork
+commits were `8f162d6a9602b89697b50ad251bedec67cb4a0f1` and
+`270619bc0200ebfd112b9dade05786d8ed9a67d0`. A patch
 already in the tree is skipped. `--set <name>` commits that optional set on
 top; `--reverse` takes it back out and, when the tree matches an ancestor,
 resets to that commit. A dirty tree, or a checkout that is neither the pin
@@ -146,7 +149,7 @@ nor `hardware/applied`, is refused.
 tree, and they refuse unless the base patches are committed. `provenance`
 prints the JSON a result's meta records (saved as `images.json` today):
 `commit` is the upstream pin
-(`0b1f1469c8e17e361e3353432bc7fceee9e04214`), `fork_commit` is the patched
+(`d6ca9a756d3d1e71489e61e44c04f33c3c893589`), `fork_commit` is the patched
 HEAD, and `patches` is `{name, sha256}` for the base series, the board's
 ring vendor patch, and any optional set that is actually committed. Each
 image's `rind` is `fork_commit` (the tree that was compiled) and its

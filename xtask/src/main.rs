@@ -1290,13 +1290,14 @@ mod tests {
         )));
     }
 
-    /// `0b1f1469` plus the base series, then plus poly1305-32. These are the
+    /// `d6ca9a75` plus the base series, then plus poly1305-32. These are the
     /// unsigned commit ids. A signed `git am` (this image sets
-    /// `commit.gpgsign`) produces different ones.
+    /// `commit.gpgsign`) produces different ones. On `0b1f1469` the unsigned
+    /// ids were `8f162d6a` and `270619bc`.
     #[test]
     fn fork_commit_of_pin_plus_patches_is_unsigned() {
         ensure_rind_repo().expect("rind submodule");
-        let pin = "0b1f1469c8e17e361e3353432bc7fceee9e04214";
+        let pin = "d6ca9a756d3d1e71489e61e44c04f33c3c893589";
         let dir = std::env::temp_dir().join(format!(
             "rind-hardware-am-{}-{}",
             std::process::id(),
@@ -1319,7 +1320,7 @@ mod tests {
 
         git_am(&dir, &base_patch_paths().expect("base patches")).expect("am base");
         let base = git(&dir, &["rev-parse", "HEAD"]).expect("rev-parse");
-        assert_eq!(base, "8f162d6a9602b89697b50ad251bedec67cb4a0f1");
+        assert_eq!(base, "eb053e787735b1898fa64ebc91ae13b31db663ec");
         assert!(
             !commit_text(&dir, &base).contains("gpgsig"),
             "base commit is signed"
@@ -1329,7 +1330,7 @@ mod tests {
         assert!(!poly.is_empty(), "poly1305-32 has no patches");
         git_am(&dir, &poly).expect("am poly1305-32");
         let with_set = git(&dir, &["rev-parse", "HEAD"]).expect("rev-parse");
-        assert_eq!(with_set, "270619bc0200ebfd112b9dade05786d8ed9a67d0");
+        assert_eq!(with_set, "29cc4b2d16bb09ea2ba065191a941723c79f9032");
         assert!(
             !commit_text(&dir, &with_set).contains("gpgsig"),
             "poly1305-32 commit is signed"

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# rind-hardware's tooling, `cargo xtask <command>` from the repository root
+# (an alias in .cargo/config.toml). Host-only, on stable; its own workspace,
+# apart from the target-specific firmware crates.
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR ISC OR MIT-0"
+publish = false
+description = "Builds, checks and packages rind-hardware's firmware images"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive", "env"] }
+flate2 = { version = "1.1", default-features = false, features = ["zlib"] }
+sha2 = "0.10"
+crc32fast = "1.5"
+
+[workspace]

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# Diagnostic build only, layered on sdkconfig.defaults, for the ChaCha crash:
+# ESP_IDF_SDKCONFIG_DEFAULTS="$PWD/sdkconfig.defaults;$PWD/sdkconfig.debug" with
+# CARGO_TARGET_DIR=$PWD/target-espdebug, both from esp32/. The paths must be
+# absolute, or the target dir must sit inside esp32/: embuild resolves them
+# against the target dir's parent and skips missing files without a word.
+# Never used for published numbers.
+CONFIG_HEAP_POISONING_COMPREHENSIVE=y
+CONFIG_HEAP_TASK_TRACKING=n
+CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+CONFIG_COMPILER_STACK_CHECK_MODE_ALL=y
+CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n

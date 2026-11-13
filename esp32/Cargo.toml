@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[package]
+name = "rind-bench-esp32"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR ISC OR MIT-0"
+publish = false
+description = "rind-bench's benches, unchanged, as ESP32-S3 firmware"
+
+[[bin]]
+name = "rind-bench-esp32"
+harness = false
+
+[profile.release]
+# rind's `bench` profile uses thin LTO; the Xtensa backend aborts on it (see README), so
+# LTO is off here. Debug info is kept for symbolising.
+opt-level = 3
+lto = false
+codegen-units = 16
+debug = true
+
+[profile.dev]
+opt-level = "s"
+debug = true
+
+[dependencies]
+esp-idf-svc = { version = "0.53", default-features = false, features = ["std", "binstart", "native"] }
+criterion = { package = "rind-bench-criterion-esp", path = "../criterion-esp" }
+rind = { path = "../rind/rind" }
+
+# rind-bench's dev-dependencies that the ported benches use, at its versions.
+aes-gcm = "0.11"
+chacha20poly1305 = "0.11"
+ed25519-dalek = { version = "3", features = ["alloc", "pkcs8", "rand_core"] }
+getrandom = { version = "0.4", features = ["sys_rng"] }
+hkdf = "0.13"
+hmac = "0.13"
+libcrux-aes = "0.0.10"
+libcrux-chacha20poly1305 = "0.0.10"
+libcrux-ecdh = "0.0.9"
+libcrux-ecdsa = "0.0.9"
+libcrux-ed25519 = { version = "0.0.10", features = ["rand"] }
+libcrux-hkdf = "0.0.9"
+libcrux-hmac = "0.0.9"
+libcrux-ml-kem = { version = "0.0.11", default-features = false, features = ["mlkem768", "alloc"] }
+libcrux-sha2 = "0.0.9"
+ml-kem = { version = "0.3", features = ["getrandom"] }
+p256 = { version = "0.14", features = ["ecdh", "getrandom"] }
+sha1 = "0.11"
+sha2 = "0.11"
+sha3 = "0.12"
+libcrux-sha3 = "0.0.11"
+x25519-dalek = { version = "3", features = ["getrandom"] }
+# ring's SystemRandom on ESP-IDF calls esp_fill_random through getrandom,
+# which ring gates behind this feature: with the radio off its output is
+# pseudo-random, which the benchmarks do not depend on.
+ring = { version = "0.17", features = ["less-safe-getrandom-espidf"] }
+aws-lc-rs = { version = "1.19", features = ["non-fips"], default-features = false, optional = true }
+aws-lc-sys = { version = "0.47", default-features = false, optional = true }
+
+ssd1306 = { version = "0.10", optional = true }
+rind-bench-oled-ui = { path = "../demo/oled-ui", optional = true }
+
+[features]
+# One bench file per firmware image, as upstream builds one binary per bench
+# file: all of them in one image overflow the Xtensa call8 range (512 KB).
+aes_gcm = []
+chacha20poly1305 = []
+xchacha20poly1305 = []
+cipher = []
+x25519 = []
+p256 = []
+ed25519 = []
+sha2 = []
+sha3 = []
+hmac = []
+hkdf = []
+mlkem768 = []
+aws-lc-rs = ["dep:aws-lc-rs", "dep:aws-lc-sys"]
+# The demo display (demo/): progress between benchmarks, then result pages.
+# Published results are measured without it.
+oled = ["dep:ssd1306", "dep:rind-bench-oled-ui"]
+# RNG diagnostics (src/rng.rs); both need --cfg getrandom_backend="custom".
+rng-diag = ["xchacha20poly1305"]
+seeded-rng = []
+
+[build-dependencies]
+embuild = "0.33"
+
+# The Xtensa LLVM backend aborts on one of libcrux-hacl-rs's functions at
+# opt-level 3 ("Unable to properly handle scavenged register for indirect
+# jump"); see the README. rind's portable backend and libcrux both run it.
+[profile.release.package.libcrux-hacl-rs]
+opt-level = 2
+
+# libcrux-p256's field inversion holds more than 64 KB of literals at
+# opt-level 3, past the range of Xtensa's l32r, and LLVM's
+# --mtext-section-literals, which would fix that, crashes the Xtensa backend
+# on it. Only libcrux's own P-256 rows run this crate.
+[profile.release.package.libcrux-p256]
+opt-level = "s"
+
+# The bench files test for upstream features this crate never defines.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("__bench_openssl", "__bench_codspeed"))', 'cfg(espidf_time64)', 'cfg(getrandom_backend, values("custom"))'] }
+
+[[example]]
+name = "oled_showcase"
+required-features = ["oled"]
+
+# ring's ChaCha20-Poly1305 crashed on Xtensa: its 64-byte-aligned Poly1305
+# state makes LLVM realign the stack without `movsp` (espressif/llvm-project
+# #140). The patch keeps the state at 16 bytes: repro/xtensa-overalign/.
+# `cargo xtask vendor-ring` makes this copy.
+[patch.crates-io]
+ring = { path = "../.tools/ring-esp" }

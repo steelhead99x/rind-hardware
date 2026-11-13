@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+# espflash finds the board, or takes the port from ESPFLASH_PORT.
+runner = "espflash flash --monitor"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32s3"
+ESP_IDF_VERSION = "v5.5.1"
+ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults"
+# Keeps ESP-IDF and its tools inside this checkout, not in ~/.espressif.
+ESP_IDF_TOOLS_INSTALL_DIR = "workspace"
+# The cc crate would pick the generic `xtensa-esp-elf-gcc`, whose default core
+# is big-endian; ring's C must be built for the ESP32-S3's core.
+CC_xtensa_esp32s3_espidf = "xtensa-esp32s3-elf-gcc"
+AR_xtensa_esp32s3_espidf = "xtensa-esp32s3-elf-ar"

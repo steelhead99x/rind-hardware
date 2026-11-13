@@ -1,0 +1,63 @@
+ring 0.17.14 for Xtensa (the ESP32-S3), used by esp32/ through [patch.crates-io];
+scripts/vendor-ring.sh applies it to a copy of the crate in .tools/ring-esp.
+It keeps poly1305_state_st at the stack's 16-byte alignment, so
+ring::aead::chacha20_poly1305::{seal,open} no longer realign the stack and
+dodge espressif/llvm-project#140 (see repro/xtensa-overalign/README.md). Not
+proposed upstream. Same license as ring.
+
+diff -ru a/crypto/poly1305/poly1305.c b/crypto/poly1305/poly1305.c
+--- a/crypto/poly1305/poly1305.c
++++ b/crypto/poly1305/poly1305.c
+@@ -29,8 +29,15 @@
+ static uint64_t mul32x32_64(uint32_t a, uint32_t b) { return (uint64_t)a * b; }
+ 
+ // Keep in sync with `poly1305_state_st` in ffi_fallback.rs.
++// rind-bench: 16 on Xtensa, matching ffi_fallback.rs; see the note there.
++#if defined(__XTENSA__)
++#define POLY1305_STATE_ALIGN 16
++#else
++#define POLY1305_STATE_ALIGN 64
++#endif
++
+ struct poly1305_state_st {
+-  alignas(64) uint32_t r0;
++  alignas(POLY1305_STATE_ALIGN) uint32_t r0;
+   uint32_t r1, r2, r3, r4;
+   uint32_t s1, s2, s3, s4;
+   uint32_t h0, h1, h2, h3, h4;
+@@ -42,7 +49,7 @@
+ // end of the data. Otherwise the input must be buffered into 16 byte blocks.
+ static void poly1305_update(struct poly1305_state_st *state, const uint8_t *in,
+                             size_t len) {
+-  debug_assert_nonsecret((uintptr_t)state % 64 == 0);
++  debug_assert_nonsecret((uintptr_t)state % POLY1305_STATE_ALIGN == 0);
+ 
+   uint32_t t0, t1, t2, t3;
+   uint64_t t[5];
+@@ -137,7 +144,7 @@
+ }
+ 
+ void CRYPTO_poly1305_init(struct poly1305_state_st *state, const uint8_t key[32]) {
+-  debug_assert_nonsecret((uintptr_t)state % 64 == 0);
++  debug_assert_nonsecret((uintptr_t)state % POLY1305_STATE_ALIGN == 0);
+ 
+   uint32_t t0, t1, t2, t3;
+ 
+diff -ru a/src/aead/poly1305/ffi_fallback.rs b/src/aead/poly1305/ffi_fallback.rs
+--- a/src/aead/poly1305/ffi_fallback.rs
++++ b/src/aead/poly1305/ffi_fallback.rs
+@@ -23,7 +23,13 @@
+ }
+ 
+ // Keep in sync with `poly1305_state_st` in poly1305.c
+-#[repr(C, align(64))]
++//
++// rind-bench: on Xtensa, a local aligned past 32 bytes makes LLVM realign
++// the stack pointer with a plain `add` after `entry` (no `movsp`), and window
++// spills then corrupt the caller (espressif/llvm-project#140). Nothing in
++// poly1305.c needs 64-byte alignment, so Xtensa uses the stack's 16.
++#[cfg_attr(not(target_arch = "xtensa"), repr(C, align(64)))]
++#[cfg_attr(target_arch = "xtensa", repr(C, align(16)))]
+ struct poly1305_state_st {
+     r0: u32,
+     r1: u32,

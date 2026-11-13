@@ -1,0 +1,4 @@
+[submodule "rind"]
+	path = rind
+	url = https://github.com/moq-dev/rind
+	ignore = dirty

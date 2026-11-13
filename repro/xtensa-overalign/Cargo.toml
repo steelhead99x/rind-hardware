@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[package]
+name = "xtensa-overalign"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR ISC OR MIT-0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3

@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[package]
+name = "rind-bench-rp2040"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR ISC OR MIT-0"
+publish = false
+description = "rind-bench's benches as bare-metal RP2040 firmware, flashed as UF2"
+
+[[bin]]
+name = "rind-bench-rp2040"
+test = false
+bench = false
+
+[profile.release]
+opt-level = 3
+# Fat LTO and one codegen unit, as on the nRF52840 images, so every library
+# on this board is built alike.
+lto = "fat"
+codegen-units = 1
+debug = true
+panic = "abort"
+
+[profile.dev]
+opt-level = "s"
+debug = true
+panic = "abort"
+
+[dependencies]
+cortex-m = { version = "0.7.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7.5"
+embedded-alloc = "0.7"
+critical-section = "1.2"
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-interrupt"] }
+embassy-rp = { version = "0.10", features = ["rt", "rp2040", "time-driver", "critical-section-impl", "boot2-w25q080"] }
+embassy-usb = { version = "0.6", default-features = false }
+embassy-sync = "0.8"
+embassy-time = "0.5"
+embassy-futures = "0.1"
+static_cell = "2"
+# Unifies portable-atomic across the tree (static_cell uses it with CAS)
+# so ARMv6-M gets a critical-section fallback. embassy-rp provides the impl.
+portable-atomic = { version = "1", default-features = false, features = ["critical-section"] }
+criterion = { package = "rind-bench-criterion-esp", path = "../criterion-esp", default-features = false }
+# The rind submodule with patches/ applied (`cargo xtask apply-patches`).
+rind = { path = "../rind/rind" }
+
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "pkcs8", "rand_core"] }
+getrandom = { version = "0.4", features = ["sys_rng"] }
+hkdf = { version = "0.13", default-features = false }
+hmac = { version = "0.13", default-features = false }
+libcrux-aes = { version = "0.0.10", default-features = false }
+libcrux-chacha20poly1305 = { version = "0.0.10", default-features = false }
+libcrux-ecdh = { version = "0.0.9", default-features = false }
+libcrux-ecdsa = { version = "0.0.9", default-features = false, features = ["rand"] }
+libcrux-ed25519 = { version = "0.0.10", default-features = false, features = ["rand"] }
+libcrux-hkdf = { version = "0.0.9", default-features = false }
+libcrux-hmac = { version = "0.0.9", default-features = false }
+libcrux-ml-kem = { version = "0.0.11", default-features = false, features = ["mlkem768", "alloc"] }
+libcrux-sha2 = { version = "0.0.9", default-features = false }
+ml-kem = { version = "0.3", default-features = false, features = ["getrandom"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdh", "ecdsa", "getrandom", "pkcs8"] }
+sha1 = { version = "0.11", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+sha3 = { version = "0.12", default-features = false }
+libcrux-sha3 = { version = "0.0.11", default-features = false }
+x25519-dalek = { version = "3", default-features = false, features = ["getrandom", "static_secrets", "precomputed-tables"] }
+# ring 0.17.14 is left out: its Arm assembly uses NEON (`vpush`) and does not
+# build for thumbv6m-none-eabi. aws-lc-rs needs an OS (patches/0002).
+
+[features]
+aes_gcm = []
+chacha20poly1305 = []
+xchacha20poly1305 = []
+cipher = []
+x25519 = []
+p256 = []
+ed25519 = []
+sha2 = []
+sha3 = []
+hmac = []
+hkdf = []
+mlkem768 = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("__bench_openssl", "__bench_codspeed", "aws-lc-rs"))', 'cfg(getrandom_backend, values("custom"))'] }

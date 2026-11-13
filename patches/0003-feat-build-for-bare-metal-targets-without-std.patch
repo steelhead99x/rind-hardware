@@ -1,0 +1,186 @@
+From d894926a69f1465943f4d153d3f465fc8ca2c8e5 Mon Sep 17 00:00:00 2001
+From: steelhead99x <steelhead99x@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 02:15:45 -0800
+Subject: [PATCH 3/3] feat: build for bare-metal targets without std
+
+On target_os = "none" rind now builds as no_std on alloc, so it runs on a
+microcontroller such as the nRF52840 (thumbv7em-none-eabihf):
+
+- lib.rs: no_std there, with alloc's macros in scope.
+- low/cpu.rs: name the architecture without std::env, and keep the DIT
+  guards in a single static rather than a thread-local, since a bare-metal
+  program calls rind from one context.
+- low/posint.rs: leave the std-only debug helper out.
+- mid/mldsa.rs: take Vec from alloc.
+- build.rs: give M-profile (Thumb-only) ARM targets the portable backend,
+  since the 32-bit ARM assembly needs ARM state and NEON.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+---
+ rind/build.rs          | 19 +++++++++++++++++--
+ rind/src/lib.rs        |  7 +++++++
+ rind/src/low/cpu.rs    | 39 +++++++++++++++++++++++++++++++++------
+ rind/src/low/posint.rs |  1 +
+ rind/src/mid/mldsa.rs  |  2 ++
+ 5 files changed, 60 insertions(+), 8 deletions(-)
+
+diff --git a/rind/build.rs b/rind/build.rs
+index a0decb95..4d2b393f 100644
+--- a/rind/build.rs
++++ b/rind/build.rs
+@@ -6,7 +6,9 @@
+ //! aarch64 or 32-bit ARM target gets the portable backend, as does every
+ //! other architecture. The 32-bit ARM assembly is cut for ARMv7, so a target
+ //! for an earlier core, such as ARMv6's `arm-unknown-linux-gnueabihf` or
+-//! ARMv5TE's `arm-linux-androideabi`, gets the portable backend too.
++//! ARMv5TE's `arm-linux-androideabi`, gets the portable backend too, and so
++//! does a microcontroller (M-profile) target such as `thumbv7em-none-eabihf`,
++//! which has no ARM state or NEON for that assembly to run in.
+ //! `--cfg rind_portable` forces it anywhere, so CI tests it on x86_64 without
+ //! emulation; it is for testing, not for shipping.
+ //!
+@@ -26,7 +28,7 @@ fn main() {
+     let forced = env::var_os("CARGO_CFG_RIND_PORTABLE").is_some();
+     let backend = match arch.as_str() {
+         "x86_64" | "aarch64" if little && !forced => arch.as_str(),
+-        "arm" if little && !forced && armv7_or_later() => "arm",
++        "arm" if little && !forced && armv7_or_later() && !m_profile() => "arm",
+         _ => "portable",
+     };
+     println!(r#"cargo::rustc-cfg=rind_backend="{backend}""#);
+@@ -49,3 +51,16 @@ fn armv7_or_later() -> bool {
+     let digits = version.bytes().take_while(u8::is_ascii_digit).count();
+     version[..digits].parse::<u32>().is_ok_and(|v| v >= 7)
+ }
++
++/// Whether the 32-bit ARM target is for a microcontroller (M-profile) core,
++/// as in `thumbv7m-none-eabi`, `thumbv7em-none-eabihf` or
++/// `thumbv8m.main-none-eabihf`: Thumb only, without NEON.
++fn m_profile() -> bool {
++    let target = env::var("TARGET").expect("cargo sets the target");
++    let arch = target.split('-').next().unwrap_or_default();
++    let Some(version) = arch.strip_prefix("thumbv") else {
++        return false;
++    };
++    let rest = version.trim_start_matches(|c: char| c.is_ascii_digit());
++    rest.starts_with('m') || rest.starts_with("em")
++}
+diff --git a/rind/src/lib.rs b/rind/src/lib.rs
+index 063c2d69..72cc27c7 100644
+--- a/rind/src/lib.rs
++++ b/rind/src/lib.rs
+@@ -1,6 +1,7 @@
+ // Written for Graviola by Joe Birr-Pixton, 2024.
+ // SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+ #![doc = include_str!("../README.md")]
++#![cfg_attr(target_os = "none", no_std)]
+ #![allow(
+     clippy::new_without_default,
+     clippy::result_unit_err,
+@@ -26,6 +27,12 @@
+ )]
+ #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+ 
++// Bare-metal targets (`target_os = "none"`) build without std, on `alloc`:
++// rind needs a global allocator there, and is used from one thread only.
++#[cfg(target_os = "none")]
++#[macro_use]
++extern crate alloc;
++
+ /// Low level operations.
+ ///
+ /// `unsafe` is allowed only here.
+diff --git a/rind/src/low/cpu.rs b/rind/src/low/cpu.rs
+index 979eb1a0..0d3f9efc 100644
+--- a/rind/src/low/cpu.rs
++++ b/rind/src/low/cpu.rs
+@@ -11,15 +11,17 @@ pub struct MissingFeature(&'static str);
+ 
+ impl fmt::Display for MissingFeature {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(
+-            f,
+-            "rind requires {} CPU support on {}",
+-            self.0,
+-            std::env::consts::ARCH
+-        )
++        write!(f, "rind requires {} CPU support on {}", self.0, ARCH)
+     }
+ }
+ 
++#[cfg(not(target_os = "none"))]
++const ARCH: &str = std::env::consts::ARCH;
++#[cfg(all(target_os = "none", target_arch = "arm"))]
++const ARCH: &str = "arm";
++#[cfg(all(target_os = "none", not(target_arch = "arm")))]
++const ARCH: &str = "this target";
++
+ impl core::error::Error for MissingFeature {}
+ 
+ /// Checks that this CPU has every feature rind requires, naming the first one missing.
+@@ -118,12 +120,37 @@ impl Drop for Dit {
+     }
+ }
+ 
++#[cfg(not(target_os = "none"))]
+ std::thread_local! {
+     // This thread's live guards, and what the first one's `enter_cpu_state`
+     // returned, for the last one to drop to restore.
+     static DIT_GUARDS: Cell<(usize, u32)> = const { Cell::new((0, 0)) };
+ }
+ 
++/// Without std there are no threads to keep apart: bare-metal targets use
++/// rind from one context, so one set of guards serves.
++#[cfg(target_os = "none")]
++static DIT_GUARDS: SingleContext = SingleContext(Cell::new((0, 0)));
++
++#[cfg(target_os = "none")]
++struct SingleContext(Cell<(usize, u32)>);
++
++// SAFETY: bare-metal targets call rind from one execution context (see
++// `lib.rs`), so the cell is never shared between threads or interrupts.
++#[cfg(target_os = "none")]
++unsafe impl Sync for SingleContext {}
++
++#[cfg(target_os = "none")]
++impl SingleContext {
++    fn get(&self) -> (usize, u32) {
++        self.0.get()
++    }
++
++    fn set(&self, value: (usize, u32)) {
++        self.0.set(value);
++    }
++}
++
+ /// Panics with [`check`]'s error rather than run instructions this CPU lacks.
+ pub(crate) fn verify_cpu_features() {
+     // Every operation calls this, and a single-block one costs little more
+diff --git a/rind/src/low/posint.rs b/rind/src/low/posint.rs
+index 5c487149..32cdde23 100644
+--- a/rind/src/low/posint.rs
++++ b/rind/src/low/posint.rs
+@@ -139,6 +139,7 @@ impl<const N: usize> PosInt<N> {
+     }
+ 
+     #[allow(dead_code)]
++    #[cfg(not(target_os = "none"))]
+     pub(crate) fn debug(&self, why: &str) {
+         let mut bytes = [0u8; 1024];
+         let bytes = self.to_bytes(&mut bytes).unwrap();
+diff --git a/rind/src/mid/mldsa.rs b/rind/src/mid/mldsa.rs
+index f38e8e6f..c192c7d2 100644
+--- a/rind/src/mid/mldsa.rs
++++ b/rind/src/mid/mldsa.rs
+@@ -15,6 +15,8 @@
+ // cannot pass as `as_chunks`'s const argument in generic code.
+ #![allow(clippy::chunks_exact_to_as_chunks)]
+ 
++#[cfg(target_os = "none")]
++use alloc::vec::Vec;
+ use core::fmt;
+ use core::panic::{RefUnwindSafe, UnwindSafe};
+ 
+-- 
+2.52.0
+

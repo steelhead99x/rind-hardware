@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[build]
+target = "thumbv7em-none-eabihf"
+target-dir = "target"
+
+[target.thumbv7em-none-eabihf]
+# flip-link puts the stack below .data/.bss so an overflow faults rather than
+# silently corrupting the heap; the fault handler then enters the bootloader.
+linker = "flip-link"
+rustflags = ["-C", "link-arg=-Tlink.x", "--cfg", 'getrandom_backend="custom"']

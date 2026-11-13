@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[build]
+target = "thumbv6m-none-eabi"
+target-dir = "target"
+
+[target.thumbv6m-none-eabi]
+# flip-link puts the stack below .data/.bss so an overflow faults rather than
+# silently corrupting the heap; the fault handler then enters the bootloader.
+# link-rp.x (from embassy-rp) places .boot2 in the BOOT2 region.
+linker = "flip-link"
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tlink-rp.x",
+    "--cfg", 'getrandom_backend="custom"',
+]

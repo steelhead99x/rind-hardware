@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# Build output, toolchains and logs: never committed.
+target/
+target-*/
+.embuild/
+.tools/
+images/
+demo-images/
+diag-images/
+*.elf
+*.bin
+*.png
+*.pbm
+sdkconfig
+sdkconfig.old
+*.log
+images-*/

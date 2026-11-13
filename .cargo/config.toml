@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# Only an alias: the firmware crates keep their own .cargo/config.toml.
+[alias]
+xtask = "run -q --release --manifest-path xtask/Cargo.toml --"

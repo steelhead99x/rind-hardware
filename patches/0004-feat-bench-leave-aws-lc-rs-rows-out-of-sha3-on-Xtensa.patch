@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steelhead99x <steelhead99x@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 10:40:00 -0800
+Subject: [PATCH 4/4] feat(bench): leave aws-lc-rs rows out of sha3 on Xtensa
+ and bare metal
+
+The same gate as the other bench files: aws-lc-sys builds for neither
+xtensa-esp32s3-espidf nor thumbv7em-none-eabihf, so the aws-lc-rs SHA-3
+rows are compiled only off those targets, and `aws!` passes `()` for the
+algorithm there. The rustcrypto, libcrux and rind rows are unchanged.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+---
+diff --git a/rind-bench/benches/sha3.rs b/rind-bench/benches/sha3.rs
+index 15235584..dce3c63a 100644
+--- a/rind-bench/benches/sha3.rs
++++ b/rind-bench/benches/sha3.rs
+@@ -3,18 +3,34 @@ use std::hint::black_box;
+ 
+ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+ 
++/// An aws-lc-rs path, or `()` on Xtensa, which aws-lc builds for no target
++/// of: there its rows are left out, and its algorithms passed as `()`.
++#[cfg(not(any(target_arch = "xtensa", target_os = "none")))]
++macro_rules! aws {
++    ($($path:tt)+) => { aws_lc_rs::$($path)+ };
++}
++#[cfg(any(target_arch = "xtensa", target_os = "none"))]
++macro_rules! aws {
++    ($($path:tt)+) => {
++        ()
++    };
++}
++
+ fn bench<R: sha3::Digest>(
+     c: &mut Criterion,
+     name: &str,
+-    aws: &'static aws_lc_rs::digest::Algorithm,
++    aws: &'static aws!(digest::Algorithm),
+     libcrux: fn(&[u8]),
+     ours: &'static rind::digest::Algorithm,
+ ) {
++    #[cfg(any(target_arch = "xtensa", target_os = "none"))]
++    let _ = aws;
+     let mut group = c.benchmark_group(name);
+     for (size, size_name) in criterion::HASH_SIZES {
+         let input = vec![0u8; size];
+         group.throughput(Throughput::Bytes(size as u64));
+ 
++        #[cfg(not(any(target_arch = "xtensa", target_os = "none")))]
+         group.bench_with_input(
+             BenchmarkId::new("aws-lc-rs", size_name),
+             &input,
+@@ -56,7 +72,7 @@ fn sha3_256(c: &mut Criterion) {
+     bench::<sha3::Sha3_256>(
+         c,
+         "sha3-256",
+-        &aws_lc_rs::digest::SHA3_256,
++        &aws!(digest::SHA3_256),
+         |data| {
+             black_box(libcrux_sha3::sha256(data));
+         },
+@@ -68,7 +84,7 @@ fn sha3_384(c: &mut Criterion) {
+     bench::<sha3::Sha3_384>(
+         c,
+         "sha3-384",
+-        &aws_lc_rs::digest::SHA3_384,
++        &aws!(digest::SHA3_384),
+         |data| {
+             black_box(libcrux_sha3::sha384(data));
+         },
+@@ -80,7 +96,7 @@ fn sha3_512(c: &mut Criterion) {
+     bench::<sha3::Sha3_512>(
+         c,
+         "sha3-512",
+-        &aws_lc_rs::digest::SHA3_512,
++        &aws!(digest::SHA3_512),
+         |data| {
+             black_box(libcrux_sha3::sha512(data));
+         },
+-- 
+2.43.0
+

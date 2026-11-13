@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[package]
+name = "rind-bench-criterion-esp"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR ISC OR MIT-0"
+publish = false
+description = "The subset of criterion's API that rind-bench's benches call, timed with a cycle counter and printed as JSON lines, for targets criterion cannot run on"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]

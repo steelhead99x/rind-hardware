@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# Experiment only: the instruction cache at 32 KB (default 16 KB), to see
+# how much of a short input's time is flash-cache misses.
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_LINE_32B=y

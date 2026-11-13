@@ -1,0 +1,108 @@
+ring 0.17.14 for thumbv7em-none-eabihf (the nRF52840), used by nrf52840/
+through [patch.crates-io]; scripts/vendor-ring.sh applies it to a copy of the
+crate in .tools/ring-nrf. Not proposed upstream. Same license as ring.
+
+- build.rs: assemble ring's 32-bit ARM perlasm (linux32 flavour) for
+  target_os = "none" too, so SHA-2, AES and GHASH keep their assembly, but
+  skip x25519-asm-arm.S and poly1305_arm_asm.S: both are NEON in ARM state,
+  which a Thumb-only Cortex-M4 can neither assemble nor run.
+- src/aead/poly1305.rs, ffi_arm_neon.rs: leave the NEON Poly1305 out on
+  target_os = "none" to match (ring picks it only after a runtime NEON check,
+  which never passes there, but the call would still need the symbol).
+
+diff -ruN a/build.rs b/build.rs
+--- a/build.rs	2026-11-12 02:15:55.638734665 -0800
++++ b/build.rs	2026-11-12 02:15:58.711441730 -0800
+@@ -195,6 +195,14 @@
+         arch: ARM,
+         perlasm_format: "linux32",
+     },
++    // Bare-metal Thumb-2 (thumbv7m/thumbv7em): the same ARMv4/ARMv7 perlasm,
++    // which assembles as Thumb-2 under `__thumb2__`; its NEON paths are
++    // never selected without NEON.
++    AsmTarget {
++        oss: &["none"],
++        arch: ARM,
++        perlasm_format: "linux32",
++    },
+     AsmTarget {
+         oss: APPLE_ABI,
+         arch: AARCH64,
+@@ -460,6 +468,17 @@
+                 {
+                     return false;
+                 }
++                // x25519-asm-arm.S and poly1305_arm_asm.S are NEON in ARM
++                // state, which a Thumb-only core can neither assemble nor
++                // run; ring calls the first only on Linux and Android, and
++                // the second not on bare metal (src/aead/poly1305.rs).
++                if target.arch == ARM
++                    && target.os == "none"
++                    && (p.ends_with("crypto/curve25519/asm/x25519-asm-arm.S")
++                        || p.ends_with("crypto/poly1305/poly1305_arm_asm.S"))
++                {
++                    return false;
++                }
+             }
+             true
+         })
+diff -ruN a/src/aead/poly1305/ffi_arm_neon.rs b/src/aead/poly1305/ffi_arm_neon.rs
+--- a/src/aead/poly1305/ffi_arm_neon.rs	2026-11-12 02:15:55.203871496 -0800
++++ b/src/aead/poly1305/ffi_arm_neon.rs	2026-11-12 02:15:57.457438402 -0800
+@@ -13,7 +13,7 @@
+ // OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+ // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ 
+-#![cfg(all(target_arch = "arm", target_endian = "little"))]
++#![cfg(all(target_arch = "arm", target_endian = "little", not(target_os = "none")))]
+ 
+ use super::{Key, Tag, KEY_LEN, TAG_LEN};
+ use crate::{c, cpu::arm::Neon};
+diff -ruN a/src/aead/poly1305.rs b/src/aead/poly1305.rs
+--- a/src/aead/poly1305.rs	2026-11-12 02:15:55.163179755 -0800
++++ b/src/aead/poly1305.rs	2026-11-12 02:15:57.586438744 -0800
+@@ -15,7 +15,7 @@
+ // TODO: enforce maximum input length.
+ 
+ use super::{Tag, TAG_LEN};
+-#[cfg(all(target_arch = "arm", target_endian = "little"))]
++#[cfg(all(target_arch = "arm", target_endian = "little", not(target_os = "none")))]
+ use crate::cpu::GetFeature as _;
+ use crate::{cpu, polyfill::slice::AsChunks};
+ 
+@@ -38,7 +38,7 @@
+ }
+ 
+ pub(super) enum Context {
+-    #[cfg(all(target_arch = "arm", target_endian = "little"))]
++    #[cfg(all(target_arch = "arm", target_endian = "little", not(target_os = "none")))]
+     ArmNeon(ffi_arm_neon::State),
+     Fallback(ffi_fallback::State),
+ }
+@@ -46,7 +46,7 @@
+ impl Context {
+     #[inline]
+     pub(super) fn from_key(key: Key, cpu: cpu::Features) -> Self {
+-        #[cfg(all(target_arch = "arm", target_endian = "little"))]
++        #[cfg(all(target_arch = "arm", target_endian = "little", not(target_os = "none")))]
+         if let Some(cpu) = cpu.get_feature() {
+             return ffi_arm_neon::State::new_context(key, cpu);
+         }
+@@ -64,7 +64,7 @@
+ 
+     fn update_internal(&mut self, input: &[u8]) {
+         match self {
+-            #[cfg(all(target_arch = "arm", target_endian = "little"))]
++            #[cfg(all(target_arch = "arm", target_endian = "little", not(target_os = "none")))]
+             Self::ArmNeon(state) => state.update_internal(input),
+             Self::Fallback(state) => state.update_internal(input),
+         }
+@@ -73,7 +73,7 @@
+     pub(super) fn finish(mut self, input: &[u8]) -> Tag {
+         self.update_internal(input);
+         match self {
+-            #[cfg(all(target_arch = "arm", target_endian = "little"))]
++            #[cfg(all(target_arch = "arm", target_endian = "little", not(target_os = "none")))]
+             Self::ArmNeon(state) => state.finish(),
+             Self::Fallback(state) => state.finish(),
+         }

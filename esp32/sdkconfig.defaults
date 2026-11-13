@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# The benchmarks' conditions: 240 MHz, no radio, no watchdog interrupting a
+# long sample, and a stack big enough for ML-KEM and the elliptic curves.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=131072
+CONFIG_ESP_TASK_WDT_EN=n
+CONFIG_ESP_TASK_WDT_INIT=n
+CONFIG_ESP_INT_WDT=n
+CONFIG_FREERTOS_HZ=100
+CONFIG_PM_ENABLE=n
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# The board's PSRAM stays off: every buffer, key, and stack lives in
+# internal SRAM, so no library is timed through the external-RAM cache.
+CONFIG_SPIRAM=n
+# Console on the USB Serial/JTAG port the board's USB-C connects.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y

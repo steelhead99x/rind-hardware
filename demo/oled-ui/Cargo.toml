@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[package]
+name = "rind-bench-oled-ui"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR ISC OR MIT-0"
+publish = false
+description = "Demo screens for rind-hardware on a 128x64 monochrome OLED: splash, live progress, per-operation bar charts, and a summary"
+
+[dependencies]
+embedded-graphics = "0.8"

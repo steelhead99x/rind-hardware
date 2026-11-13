@@ -87,9 +87,9 @@ until they land.
 ## Build
 
 ```sh
-cargo xtask apply-patches
+cargo xtask apply-patches   # commits onto rind's hardware/applied branch
 cargo xtask build-images rp2040    # rp2040/images/<bench>.{elf,bin,uf2}; sources rp2040/env.sh
-cargo xtask provenance rp2040 --rind-bench <commit> --note "rp2040 build"
+cargo xtask provenance rp2040 --rind-bench <commit> --note "rp2040 build"   # refuses a dirty rind tree
 ```
 
 `cargo xtask uf2 IMAGE.bin OUT.uf2 --base 0x10000000 --family 0xe48bff56` writes

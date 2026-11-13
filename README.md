@@ -130,12 +130,17 @@ cd esp32 && espflash flash --port <PORT> --flash-freq 80mhz images/aes_gcm.elf &
 
 `apply-patches` commits the base patches with `git am` onto the local branch
 `hardware/applied` inside the submodule, starting from the pinned commit
-(initialising the submodule if `rind/` is missing). The committer is fixed
-(`steelhead99x`), so the same patches on the same pin produce the same fork
-commit on every machine. A patch already in the tree is skipped. `--set
-<name>` commits that optional set on top; `--reverse` takes it back out and,
-when the tree matches an ancestor, resets to that commit. A dirty tree, or a
-checkout that is neither the pin nor `hardware/applied`, is refused.
+(initialising the submodule if `rind/` is missing). The commits are unsigned
+and the committer is fixed (`steelhead99x`, `commit.gpgsign=false`,
+`--no-gpg-sign`, `--no-signoff`, `i18n.commitEncoding=utf-8`,
+`--committer-date-is-author-date`), so a machine whose git signs commits does
+not produce a different id. On this pin the base series is
+`8f162d6a9602b89697b50ad251bedec67cb4a0f1`. With the `poly1305-32` set on
+top, the fork commit is `270619bc0200ebfd112b9dade05786d8ed9a67d0`. A patch
+already in the tree is skipped. `--set <name>` commits that optional set on
+top; `--reverse` takes it back out and, when the tree matches an ancestor,
+resets to that commit. A dirty tree, or a checkout that is neither the pin
+nor `hardware/applied`, is refused.
 
 `build-images`, `provenance`, and the firmware half of `check` refuse a dirty
 tree, and they refuse unless the base patches are committed. `provenance`

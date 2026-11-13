@@ -36,8 +36,9 @@ const BENCHES: &[&str] = &[
 /// here. The parent repository's gitlink stays at the upstream pin.
 const PATCH_BRANCH: &str = "hardware/applied";
 
-/// Committer for those commits. It is fixed so `fork_commit` does not depend
-/// on who runs the tool. The author stays the one named in the patch.
+/// Committer for those commits. It is fixed, and the commits are unsigned, so
+/// `fork_commit` does not depend on who runs the tool or on `commit.gpgsign`.
+/// The author stays the one named in the patch.
 const PATCH_COMMITTER_NAME: &str = "steelhead99x";
 const PATCH_COMMITTER_EMAIL: &str = "steelhead99x@users.noreply.github.com";
 
@@ -370,17 +371,31 @@ fn patches_dir() -> PathBuf {
     root().join("patches")
 }
 
-/// `git -C dir` with the fixed patch committer, and no author/committer
-/// environment variables that would change the commit id.
+/// Config that would otherwise change the commit object: a signature
+/// (`commit.gpgsign`, on in some images), a non-UTF-8 encoding header, or a
+/// Signed-off-by / Message-Id trailer.
+const PATCH_GIT_CONFIG: &[(&str, &str)] = &[
+    ("user.name", PATCH_COMMITTER_NAME),
+    ("user.email", PATCH_COMMITTER_EMAIL),
+    ("commit.gpgsign", "false"),
+    ("tag.gpgsign", "false"),
+    ("i18n.commitEncoding", "utf-8"),
+    ("am.signoff", "false"),
+    ("format.signOff", "false"),
+    ("am.messageid", "false"),
+];
+
+/// `git -C dir` with a fixed, unsigned commit identity. Author and committer
+/// dates and names from the environment are cleared so they cannot change
+/// the commit id. Command-line `-c` overrides repo and global config,
+/// including `commit.gpgsign`.
 fn git_identity(dir: &Path, args: &[String]) -> Result<(), String> {
     let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(dir)
-        .arg("-c")
-        .arg(format!("user.name={PATCH_COMMITTER_NAME}"))
-        .arg("-c")
-        .arg(format!("user.email={PATCH_COMMITTER_EMAIL}"))
-        .args(args)
+    cmd.arg("-C").arg(dir);
+    for (key, value) in PATCH_GIT_CONFIG {
+        cmd.arg("-c").arg(format!("{key}={value}"));
+    }
+    cmd.args(args)
         .stdin(Stdio::null())
         .env("GIT_EDITOR", "true")
         .env_remove("GIT_AUTHOR_NAME")
@@ -388,7 +403,9 @@ fn git_identity(dir: &Path, args: &[String]) -> Result<(), String> {
         .env_remove("GIT_AUTHOR_DATE")
         .env_remove("GIT_COMMITTER_NAME")
         .env_remove("GIT_COMMITTER_EMAIL")
-        .env_remove("GIT_COMMITTER_DATE");
+        .env_remove("GIT_COMMITTER_DATE")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS");
     let st = cmd.status().map_err(|e| format!("git: {e}"))?;
     if st.success() {
         Ok(())
@@ -568,18 +585,22 @@ fn ensure_patch_branch(pin: &str) -> Result<(), String> {
     require_clean_rind()
 }
 
-fn git_am(patches: &[PathBuf]) -> Result<(), String> {
+fn git_am(dir: &Path, patches: &[PathBuf]) -> Result<(), String> {
     let mut args = vec![
         "am".to_string(),
+        "--no-gpg-sign".to_string(),
+        "--no-signoff".to_string(),
+        "--no-verify".to_string(),
+        "--whitespace=nowarn".to_string(),
         "--committer-date-is-author-date".to_string(),
     ];
     for p in patches {
         args.push(p.display().to_string());
     }
-    if let Err(e) = git_identity(&rind_dir(), &args) {
+    if let Err(e) = git_identity(dir, &args) {
         let abort = Command::new("git")
             .arg("-C")
-            .arg(rind_dir())
+            .arg(dir)
             .args(["am", "--abort"])
             .stdin(Stdio::null())
             .status();
@@ -718,7 +739,7 @@ fn apply_patches(set: Option<&str>, reverse: bool) -> Result<(), String> {
         println!("already applied at {} (upstream {pin})", rind_head()?);
         return Ok(());
     }
-    git_am(&pending)?;
+    git_am(&rind_dir(), &pending)?;
     require_clean_rind()?;
     println!(
         "committed on {PATCH_BRANCH} at {} (upstream {pin})",
@@ -763,6 +784,7 @@ fn reverse_set(set: &str, pin: &str) -> Result<(), String> {
         &rind_dir(),
         &[
             "commit".into(),
+            "--no-gpg-sign".into(),
             "-m".into(),
             format!("revert(patches): drop optional set {set}"),
         ],
@@ -1211,6 +1233,22 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+
+    /// Removes a temporary rind worktree, including after a panic.
+    struct AmWorktree(std::path::PathBuf);
+
+    impl Drop for AmWorktree {
+        fn drop(&mut self) {
+            let _ = Command::new("git")
+                .arg("-C")
+                .arg(rind_dir())
+                .args(["worktree", "remove", "--force", "--"])
+                .arg(&self.0)
+                .status();
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn sha256_of_abc() {
@@ -1250,5 +1288,62 @@ mod tests {
         assert!(body.contains(&format!(
             "\"commit\": \"{commit}\",\n   \"fork_commit\": \"{fork}\""
         )));
+    }
+
+    /// `0b1f1469` plus the base series, then plus poly1305-32. These are the
+    /// unsigned commit ids. A signed `git am` (this image sets
+    /// `commit.gpgsign`) produces different ones.
+    #[test]
+    fn fork_commit_of_pin_plus_patches_is_unsigned() {
+        ensure_rind_repo().expect("rind submodule");
+        let pin = "0b1f1469c8e17e361e3353432bc7fceee9e04214";
+        let dir = std::env::temp_dir().join(format!(
+            "rind-hardware-am-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let add = Command::new("git")
+            .arg("-C")
+            .arg(rind_dir())
+            .args(["worktree", "add", "--detach", "--"])
+            .arg(&dir)
+            .arg(pin)
+            .status()
+            .expect("git worktree");
+        assert!(add.success(), "worktree add of {pin} failed");
+        let _guard = AmWorktree(dir.clone());
+
+        git_am(&dir, &base_patch_paths().expect("base patches")).expect("am base");
+        let base = git(&dir, &["rev-parse", "HEAD"]).expect("rev-parse");
+        assert_eq!(base, "8f162d6a9602b89697b50ad251bedec67cb4a0f1");
+        assert!(
+            !commit_text(&dir, &base).contains("gpgsig"),
+            "base commit is signed"
+        );
+
+        let poly = set_patch_paths("poly1305-32").expect("poly1305-32");
+        assert!(!poly.is_empty(), "poly1305-32 has no patches");
+        git_am(&dir, &poly).expect("am poly1305-32");
+        let with_set = git(&dir, &["rev-parse", "HEAD"]).expect("rev-parse");
+        assert_eq!(with_set, "270619bc0200ebfd112b9dade05786d8ed9a67d0");
+        assert!(
+            !commit_text(&dir, &with_set).contains("gpgsig"),
+            "poly1305-32 commit is signed"
+        );
+    }
+
+    fn commit_text(dir: &std::path::Path, rev: &str) -> String {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["cat-file", "-p", rev])
+            .output()
+            .expect("cat-file");
+        assert!(o.status.success());
+        String::from_utf8_lossy(&o.stdout).into_owned()
     }
 }

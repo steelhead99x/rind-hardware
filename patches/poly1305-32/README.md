@@ -113,15 +113,15 @@ published set.
 
 ## Hardware run
 
-ESP32-S3 on `<PORT>`, from `~/rind-results` (about 10 minutes):
+ESP32-S3, from `~/rind-results` (about 10 minutes). Set `ESPFLASH_PORT` if more than one board is plugged in:
 
 ```sh
-cd ~/rind-bench/esp32/images-poly1305-32 && sha256sum -c SHA256SUMS && cd -
-cd ~/rind-bench/esp32/images-poly1305-32-base && sha256sum -c SHA256SUMS && cd -
+cd ~/rind-hardware/esp32/images-poly1305-32 && sha256sum -c SHA256SUMS && cd -
+cd ~/rind-hardware/esp32/images-poly1305-32-base && sha256sum -c SHA256SUMS && cd -
 cd ~/rind-results
 D=results/esp32s3/diag/poly1305-32
-OUT=$D/raw-base cargo xtask run-all ~/rind-bench/esp32/images-poly1305-32-base chacha20poly1305 xchacha20poly1305
-OUT=$D/raw      cargo xtask run-all ~/rind-bench/esp32/images-poly1305-32      chacha20poly1305 xchacha20poly1305
+OUT=$D/raw-base cargo xtask run-all ~/rind-hardware/esp32/images-poly1305-32-base chacha20poly1305 xchacha20poly1305
+OUT=$D/raw      cargo xtask run-all ~/rind-hardware/esp32/images-poly1305-32      chacha20poly1305 xchacha20poly1305
 cargo xtask compare $D/raw-base $D/raw chacha20poly1305 xchacha20poly1305 \
   --label-a hacl --label-b poly1305-32 --out $D/compare.md
 ```
@@ -138,8 +138,8 @@ and restart both. Between those steps:
 ```sh
 cd ~/rind-results
 D=results/nrf52840/diag/poly1305-32
-OUT=$D/raw-base cargo xtask run-all-nrf ~/rind-bench/nrf52840/images-poly1305-32-base chacha20poly1305 xchacha20poly1305
-OUT=$D/raw      cargo xtask run-all-nrf ~/rind-bench/nrf52840/images-poly1305-32      chacha20poly1305 xchacha20poly1305
+OUT=$D/raw-base cargo xtask run-all-nrf ~/rind-hardware/nrf52840/images-poly1305-32-base chacha20poly1305 xchacha20poly1305
+OUT=$D/raw      cargo xtask run-all-nrf ~/rind-hardware/nrf52840/images-poly1305-32      chacha20poly1305 xchacha20poly1305
 cargo xtask compare $D/raw-base $D/raw chacha20poly1305 xchacha20poly1305 \
   --label-a hacl --label-b poly1305-32 --out $D/compare.md
 ```

@@ -11,6 +11,7 @@ microcontrollers. Each benchmark prints one JSON line in the IDs and shape rind'
 | ESP32-S3 (Seeed XIAO ESP32S3) | Xtensa LX7, 240 MHz | `xtensa-esp32s3-espidf` | runs; this README |
 | nRF52840 (Seeed T1000-E) | Cortex-M4F, 64 MHz | `thumbv7em-none-eabihf` | runs; [nrf52840/README.md](nrf52840/README.md) |
 | RP2040 (Raspberry Pi Pico) | Cortex-M0+, 125 MHz | `thumbv6m-none-eabi` | builds, not yet run on hardware; [rp2040/README.md](rp2040/README.md) |
+| EFR32MG24 (Seeed XIAO MG24) | Cortex-M33F, 78 MHz | `thumbv8m.main-none-eabihf` | runs; [efr32mg24/README.md](efr32mg24/README.md) |
 
 This repository was called `rind-bench`. It is not rind's `rind-bench` crate; it compiles that
 crate's bench files from the `rind` submodule.
@@ -27,6 +28,7 @@ repo holds only the firmware and the upstream-ready port.
 | `patches/` | Numbered patches against rind this port needs, as `git format-patch` output, including `0003` (no_std) and `0005` (`ReuseCache` without CAS); optional patch sets in subdirectories (`patches/poly1305-32/`), applied only with `cargo xtask apply-patches --set <name>` | **the upstream PR** |
 | `nrf52840/` | The nRF52840 (T1000-E) firmware, `thumbv7em-none-eabihf` | [nrf52840/README.md](nrf52840/README.md) |
 | `rp2040/` | The RP2040 (Pico) firmware, `thumbv6m-none-eabi`; builds and is ready for hardware | [rp2040/README.md](rp2040/README.md) |
+| `efr32mg24/` | The EFR32MG24 (XIAO MG24) firmware, `thumbv8m.main-none-eabihf`, output over RTT | [efr32mg24/README.md](efr32mg24/README.md) |
 | `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (idempotent; `--set` adds an optional patch set, `--reverse` takes it out), `vendor-ring`, `build-images`, `provenance`, `check`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
 | `criterion-esp/` | A criterion API shim, renamed to `criterion`: the bench files' `criterion::*` calls time with the core's cycle counter and print JSON | maybe, as a dev tool |
 | `esp32/` | The ESP-IDF firmware: compiles the bench files with `#[path]`, runs known-answer checks, the hardware AES/SHA baseline | maybe, under `rind-bench/esp32` |

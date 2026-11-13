@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+[package]
+name = "rind-bench-efr32mg24"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR ISC OR MIT-0"
+publish = false
+description = "rind-bench's benches as bare-metal EFR32MG24 firmware (Seeed XIAO MG24), flashed over SWD"
+
+[[bin]]
+name = "rind-bench-efr32mg24"
+test = false
+bench = false
+
+[profile.release]
+opt-level = 3
+# Fat LTO, as on the nRF52840 and RP2040 images, so the Cortex-M images are
+# built alike.
+lto = "fat"
+codegen-units = 1
+debug = true
+panic = "abort"
+
+[profile.dev]
+opt-level = "s"
+debug = true
+panic = "abort"
+
+[dependencies]
+cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7.5"
+embedded-alloc = "0.7"
+criterion = { package = "rind-bench-criterion-esp", path = "../criterion-esp", default-features = false }
+# The rind submodule with patches/ applied (`cargo xtask apply-patches`).
+rind = { path = "../rind/rind" }
+
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "pkcs8", "rand_core"] }
+getrandom = { version = "0.4", features = ["sys_rng"] }
+hkdf = { version = "0.13", default-features = false }
+hmac = { version = "0.13", default-features = false }
+libcrux-aes = { version = "0.0.10", default-features = false }
+libcrux-chacha20poly1305 = { version = "0.0.10", default-features = false }
+libcrux-ecdh = { version = "0.0.9", default-features = false }
+libcrux-ecdsa = { version = "0.0.9", default-features = false, features = ["rand"] }
+libcrux-ed25519 = { version = "0.0.10", default-features = false, features = ["rand"] }
+libcrux-hkdf = { version = "0.0.9", default-features = false }
+libcrux-hmac = { version = "0.0.9", default-features = false }
+libcrux-ml-kem = { version = "0.0.11", default-features = false, features = ["mlkem768", "alloc"] }
+libcrux-sha2 = { version = "0.0.9", default-features = false }
+ml-kem = { version = "0.3", default-features = false, features = ["getrandom"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdh", "ecdsa", "getrandom", "pkcs8"] }
+sha1 = { version = "0.11", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+sha3 = { version = "0.12", default-features = false }
+libcrux-sha3 = { version = "0.0.11", default-features = false }
+x25519-dalek = { version = "3", default-features = false, features = ["getrandom", "static_secrets", "precomputed-tables"] }
+# ring implements SystemRandom on bare metal only with this feature, which
+# routes it through getrandom 0.2's custom backend (no RDRAND on Arm).
+ring = { version = "0.17", default-features = false, features = ["alloc", "less-safe-getrandom-custom-or-rdrand"] }
+# ring's randomness on bare metal: getrandom 0.2's custom backend.
+getrandom02 = { package = "getrandom", version = "0.2", features = ["custom"] }
+
+[features]
+aes_gcm = []
+chacha20poly1305 = []
+xchacha20poly1305 = []
+cipher = []
+x25519 = []
+p256 = []
+ed25519 = []
+sha2 = []
+sha3 = []
+hmac = []
+hkdf = []
+mlkem768 = []
+
+
+[build-dependencies]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("__bench_openssl", "__bench_codspeed", "aws-lc-rs"))', 'cfg(getrandom_backend, values("custom"))'] }
+
+# ring 0.17.14 with its build script taught to assemble its existing ARM
+# perlasm for bare-metal Thumb-2 (ARMv8-M Mainline is Thumb-2 too); see
+# ../patches/ring-0.17.14-thumbv7em.patch.
+[patch.crates-io]
+ring = { path = "../.tools/ring-nrf" }
+
+# As on the ESP32 image: libcrux-p256's field inversion is huge at opt-level 3
+# (on the nRF52840 the p256 image overflowed its application region).
+# Only libcrux's own P-256 rows run this crate.
+[profile.release.package.libcrux-p256]
+opt-level = "s"
+

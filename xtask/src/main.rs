@@ -3,8 +3,9 @@
 //!
 //! The firmware crates build with target toolchains (espup's `esp` for the
 //! ESP32-S3, a pinned stable with thumbv7em for the nRF52840 and thumbv6m
-//! for the RP2040) whose environment `esp32/env.sh`, `nrf52840/env.sh` and
-//! `rp2040/env.sh` set up; those stay shell, sourced by these commands
+//! for the RP2040, thumbv8m.main for the EFR32MG24) whose environment
+//! `esp32/env.sh`, `nrf52840/env.sh`, `rp2040/env.sh` and `efr32mg24/env.sh`
+//! set up; those stay shell, sourced by these commands
 //! before each cargo call, since that environment is the toolchains' own
 //! export scripts.
 
@@ -44,6 +45,7 @@ enum Board {
     Esp,
     Nrf,
     Rp2040,
+    Mg24,
 }
 
 #[derive(Subcommand)]
@@ -69,7 +71,7 @@ enum Cmd {
     },
     /// Copy ring 0.17.14 from cargo's registry into .tools/ring-{nrf,esp} and patch it
     VendorRing,
-    /// Build one image per bench file into <board>/<out>/<bench>.elf (and .bin, .uf2 for the nRF52840 and RP2040)
+    /// Build one image per bench file into <board>/<out>/<bench>.elf (and .bin, .uf2 for the nRF52840 and RP2040; the EFR32MG24 flashes the .elf over SWD)
     BuildImages {
         board: Board,
         /// benches to build; default every bench this port runs
@@ -178,6 +180,7 @@ fn crate_dir(b: Board) -> PathBuf {
         Board::Esp => "esp32",
         Board::Nrf => "nrf52840",
         Board::Rp2040 => "rp2040",
+        Board::Mg24 => "efr32mg24",
     })
 }
 
@@ -205,6 +208,7 @@ fn check(clean: bool) -> Result<(), String> {
         "demo/oled-ui/examples",
         "nrf52840/src",
         "rp2040/src",
+        "efr32mg24/src",
         "xtask/src",
     ] {
         files.extend(rust_files(&r.join(d)));
@@ -214,6 +218,7 @@ fn check(clean: bool) -> Result<(), String> {
             "demo/firmware/oled.rs",
             "nrf52840/build.rs",
             "rp2040/build.rs",
+            "efr32mg24/build.rs",
             "esp32/build.rs",
             "repro/xtensa-overalign/src/lib.rs",
         ]
@@ -306,6 +311,17 @@ fn check(clean: bool) -> Result<(), String> {
         println!("== clippy rp2040 {b}");
         sh(
             &rp,
+            Some("env.sh"),
+            &format!("cargo clippy --release --features {b} -- -D warnings"),
+            &v,
+        )?;
+    }
+    let mg = r.join("efr32mg24");
+    let v = tdir("efr32mg24");
+    for b in BENCHES {
+        println!("== clippy efr32mg24 {b}");
+        sh(
+            &mg,
             Some("env.sh"),
             &format!("cargo clippy --release --features {b} -- -D warnings"),
             &v,
@@ -505,6 +521,10 @@ fn build_images(
                     )?
                 );
             }
+            Board::Mg24 => {
+                let elf = dir.join("target/thumbv8m.main-none-eabihf/release/rind-bench-efr32mg24");
+                std::fs::copy(elf, out.join(format!("{b}.elf"))).map_err(|e| e.to_string())?;
+            }
             Board::Rp2040 => {
                 let elf = dir.join("target/thumbv6m-none-eabi/release/rind-bench-rp2040");
                 std::fs::copy(&elf, out.join(format!("{b}.elf"))).map_err(|e| e.to_string())?;
@@ -586,7 +606,7 @@ fn provenance(
         dir.join(images)
     };
     let ext = match board {
-        Board::Esp => "elf",
+        Board::Esp | Board::Mg24 => "elf",
         Board::Nrf | Board::Rp2040 => "uf2",
     };
     let rind = git(&root().join("rind"), &["rev-parse", "HEAD"])?;
@@ -595,7 +615,8 @@ fn provenance(
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n.ends_with(".patch") && (board == Board::Esp || !n.contains("xtensa")))
-        .filter(|n| board == Board::Nrf || !n.contains("thumbv7em"))
+        // The EFR32MG24 builds ring with the same Thumb-2 patch.
+        .filter(|n| matches!(board, Board::Nrf | Board::Mg24) || !n.contains("thumbv7em"))
         .collect();
     patches.sort();
     if let Some(set) = set {

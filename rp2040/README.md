@@ -15,7 +15,14 @@ board, as [Hardware](#hardware) lists.
   atomics: ARMv6-M has no CAS, so `AtomicU8::compare_exchange` and `fetch_max`
   do not exist. The fallback keeps the same state machine in a `Cell`, with no
   new crate, matching rind's existing "one execution context on bare metal"
-  assumption. `build.rs` here rewrites each bench file's `std::` paths to
+  assumption.
+- **Two ARMv6-M speedups**, both on Arm targets without CAS atomics only.
+  `patches/0006` gives SHA-512 a rolled loop: HACL*'s unrolled one is about
+  27 KB of Thumb code, larger than the 16 KB XIP cache, and ran at about
+  2,200 cycles per byte (0.095x the time at 16 KB). `patches/0007` takes
+  GHASH's 32x32->64 carry-less products with `muls` alone instead of
+  `__aeabi_lmul` calls (AES-GCM 0.48x to 0.53x the time).
+- `build.rs` here rewrites each bench file's `std::` paths to
   `core::`/`alloc::` and compiles ring rows out (see below); the bench code is
   otherwise upstream's.
 - **The criterion shim** (`../criterion-esp`) builds without its `std` feature:
@@ -77,6 +84,11 @@ To flash and run, plug in:
 There is no official QEMU machine for the RP2040 with enough RAM to run these
 images (only `qemu-system-xtensa` is vendored here), so this port ships as a
 build and a UF2; known-answer checks run on the board after a flash.
+
+First hardware run, 2026-11-12: a Raspberry Pi Pico (12 MHz crystal,
+W25Q080-compatible flash), flashed with `picotool load -x`; every
+known-answer check passed on all twelve images. The numbers are in
+rind-results, `results/rp2040/`.
 
 ## Build
 

@@ -4,7 +4,7 @@
 Two series live here, and they do not share a number sequence.
 
 **Base series.** `0001` through `0005` in this directory are `git format-patch`
-files against the pinned rind commit. `cargo xtask apply-patches` commits them
+files against the pinned rind commit. `cargo xtask apply-patches` applies them
 in order. A new required patch appends `0006` here only when it is part of
 that series. An optional patch does not.
 

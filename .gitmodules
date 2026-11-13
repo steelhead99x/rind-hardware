@@ -1,4 +1,4 @@
 [submodule "rind"]
 	path = rind
-	url = https://github.com/moq-dev/rind
+	url = https://github.com/kixel-ai/rind
 	ignore = dirty

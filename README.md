@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0 -->
 # rind-hardware
 
-[rind](https://github.com/moq-dev/rind)'s own benchmark suite, `rind-bench/benches/*.rs`, compiled
+[rind](https://github.com/kixel-ai/rind)'s own benchmark suite, `rind-bench/benches/*.rs`, compiled
 unchanged but for the small patches in `patches/`, as bare-metal and ESP-IDF firmware for
 microcontrollers. Each benchmark prints one JSON line in the IDs and shape rind's
 `admin/bench-report` reads.
@@ -23,11 +23,11 @@ repo holds only the firmware and the upstream-ready port.
 
 | Path | What it is | Upstream? |
 |---|---|---|
-| `rind/` | Submodule: upstream `moq-dev/rind`, pinned at `98568332` (main, 2026-11-12) | upstream |
-| `patches/` | Numbered patches against rind this port needs, as `git format-patch` output, including `0003` (no_std) and `0005` (`ReuseCache` without CAS); optional patch sets in subdirectories (`patches/poly1305-32/`), applied only with `cargo xtask apply-patches --set <name>` | **the upstream PR** |
+| `rind/` | Submodule: upstream [`kixel-ai/rind`](https://github.com/kixel-ai/rind) (`moq-dev/rind` redirects), pinned at `0b1f1469` (2026-11-13) | upstream |
+| `patches/` | `git format-patch` series that `apply-patches` commits onto the submodule. Base patches `0001`–`0005` are required. Optional sets live in `patches/<name>/`, numbered from `0001` in that directory, and are applied with `--set <name>`. Ring vendor patches are unnumbered | **the upstream PR** |
 | `nrf52840/` | The nRF52840 (T1000-E) firmware, `thumbv7em-none-eabihf` | [nrf52840/README.md](nrf52840/README.md) |
 | `rp2040/` | The RP2040 (Pico) firmware, `thumbv6m-none-eabi`; builds; known-answer checks passed on a Pico | [rp2040/README.md](rp2040/README.md) |
-| `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (idempotent; `--set` adds an optional patch set, `--reverse` takes it out), `vendor-ring`, `build-images`, `provenance`, `check`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
+| `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (commits the series on the submodule branch `hardware/applied`; idempotent; `--set` / `--reverse`), `vendor-ring`, `build-images` and `provenance` (both refuse a dirty rind tree), `check`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
 | `criterion-esp/` | A criterion API shim, renamed to `criterion`: the bench files' `criterion::*` calls time with the core's cycle counter and print JSON | maybe, as a dev tool |
 | `esp32/` | The ESP-IDF firmware: compiles the bench files with `#[path]`, runs known-answer checks, the hardware AES/SHA baseline | maybe, under `rind-bench/esp32` |
 | `host-kat/` | The boards' known-answer checks (`esp32/src/vectors.rs`, by path, unchanged) on a Linux host, plus aws-lc-rs, graviola and OpenSSL against the same vectors and rind's outputs; run before timing a host (the Jetson Orin Nano in rind-results) | no |
@@ -124,8 +124,31 @@ cargo xtask build-images esp           # esp32/images/<bench>.elf, ESP-IDF v5.5.
 cargo xtask build-images nrf           # nrf52840/images/<bench>.{elf,bin,uf2}
 cargo xtask build-images rp2040        # rp2040/images/<bench>.{elf,bin,uf2}; no board needed to build
 cargo xtask build-images esp --out images-pad1031 --pad 1031 aes_gcm   # a relinked (layout-shifted) image
+cargo xtask provenance esp --rind-bench <commit> --note "esp build"
 cd esp32 && espflash flash --port <PORT> --flash-freq 80mhz images/aes_gcm.elf && espflash monitor   # RB: lines
 ```
+
+`apply-patches` commits the base patches with `git am` onto the local branch
+`hardware/applied` inside the submodule, starting from the pinned commit
+(initialising the submodule if `rind/` is missing). The committer is fixed
+(`steelhead99x`), so the same patches on the same pin produce the same fork
+commit on every machine. A patch already in the tree is skipped. `--set
+<name>` commits that optional set on top; `--reverse` takes it back out and,
+when the tree matches an ancestor, resets to that commit. A dirty tree, or a
+checkout that is neither the pin nor `hardware/applied`, is refused.
+
+`build-images`, `provenance`, and the firmware half of `check` refuse a dirty
+tree, and they refuse unless the base patches are committed. `provenance`
+prints the JSON a result's meta records (saved as `images.json` today):
+`commit` is the upstream pin
+(`0b1f1469c8e17e361e3353432bc7fceee9e04214`), `fork_commit` is the patched
+HEAD, and `patches` is `{name, sha256}` for the base series, the board's
+ring vendor patch, and any optional set that is actually committed. Each
+image's `rind` is `fork_commit` (the tree that was compiled) and its
+`commit` is the upstream pin. Do not stage the submodule after
+`apply-patches`: `git status` shows new commits on `rind` because
+`hardware/applied` is ahead of the pin. That fork stays local; the pin in
+this repo stays the upstream SHA.
 
 `esp32/env.sh` puts the ESP GCC and `.tools/export-esp.sh` on `PATH`. ring's C needs
 `CC_xtensa_esp32s3_espidf`/`AR_..._espidf` set to the chip's own `xtensa-esp32s3-elf-*` tools

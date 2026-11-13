@@ -14,7 +14,7 @@ mod uf2;
 use clap::{Parser, Subcommand, ValueEnum};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 /// Every bench file this port runs, in the order they build and run.
 const BENCHES: &[&str] = &[
@@ -31,6 +31,15 @@ const BENCHES: &[&str] = &[
     "hkdf",
     "mlkem768",
 ];
+
+/// Local branch in the rind submodule. `apply-patches` commits the series
+/// here. The parent repository's gitlink stays at the upstream pin.
+const PATCH_BRANCH: &str = "hardware/applied";
+
+/// Committer for those commits. It is fixed so `fork_commit` does not depend
+/// on who runs the tool. The author stays the one named in the patch.
+const PATCH_COMMITTER_NAME: &str = "steelhead99x";
+const PATCH_COMMITTER_EMAIL: &str = "steelhead99x@users.noreply.github.com";
 
 #[derive(Parser)]
 #[command(about = "rind-hardware tooling", disable_help_subcommand = true)]
@@ -57,13 +66,15 @@ enum Cmd {
         #[arg(long, env = "CHECK_CLEAN")]
         clean: bool,
     },
-    /// Apply patches/[0-9]*.patch to the rind submodule's working tree (an applied patch is skipped),
-    /// then with --set the optional patch set patches/<set>/[0-9]*.patch
+    /// Commit patches/[0-9]*.patch onto the rind submodule's local branch
+    /// `hardware/applied` (`git am`; an applied patch is skipped), then with
+    /// --set the optional set patches/<set>/[0-9]*.patch. Refuses a dirty tree.
     ApplyPatches {
         /// an optional patch set, a directory under patches/ such as poly1305-32
         #[arg(long)]
         set: Option<String>,
-        /// take the set back out (newest patch first), leaving the base patches applied
+        /// take the set back out (newest patch first), leaving the base patches
+        /// committed. Resets to the ancestor whose tree matches, when there is one.
         #[arg(long, requires = "set")]
         reverse: bool,
     },
@@ -80,7 +91,9 @@ enum Cmd {
         #[arg(long, env = "RIND_BENCH_PAD")]
         pad: Option<usize>,
     },
-    /// Each image's sha256 and source, as rind-results' images.json takes it
+    /// Each image's sha256 and source. Refuses a dirty rind tree. Prints JSON
+    /// with `commit` (upstream pin), `fork_commit` (patched HEAD) and
+    /// `patches` as `{name, sha256}`, including the board's ring vendor patch.
     Provenance {
         board: Board,
         #[arg(long, default_value = "images")]
@@ -251,6 +264,9 @@ fn check(clean: bool) -> Result<(), String> {
         "cargo +stable clippy --all-targets -- -D warnings",
         &tdir("demo/oled-ui"),
     )?;
+    // The firmware images compile the rind submodule. A dirty or unpatched
+    // tree would make the clippy result unreproducible.
+    require_rind_tree(None)?;
     let esp = r.join("esp32");
     let v = tdir("esp32");
     for b in BENCHES {
@@ -346,51 +362,416 @@ fn patch_set_dir(set: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Whether the rind working tree already holds `rel` (relative to rind/).
-fn patch_applied(rel: &str) -> bool {
+fn rind_dir() -> PathBuf {
+    root().join("rind")
+}
+
+fn patches_dir() -> PathBuf {
+    root().join("patches")
+}
+
+/// `git -C dir` with the fixed patch committer, and no author/committer
+/// environment variables that would change the commit id.
+fn git_identity(dir: &Path, args: &[String]) -> Result<(), String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(dir)
+        .arg("-c")
+        .arg(format!("user.name={PATCH_COMMITTER_NAME}"))
+        .arg("-c")
+        .arg(format!("user.email={PATCH_COMMITTER_EMAIL}"))
+        .args(args)
+        .stdin(Stdio::null())
+        .env("GIT_EDITOR", "true")
+        .env_remove("GIT_AUTHOR_NAME")
+        .env_remove("GIT_AUTHOR_EMAIL")
+        .env_remove("GIT_AUTHOR_DATE")
+        .env_remove("GIT_COMMITTER_NAME")
+        .env_remove("GIT_COMMITTER_EMAIL")
+        .env_remove("GIT_COMMITTER_DATE");
+    let st = cmd.status().map_err(|e| format!("git: {e}"))?;
+    if st.success() {
+        Ok(())
+    } else {
+        Err(format!("git {} failed ({st})", args.join(" ")))
+    }
+}
+
+fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> Result<bool, String> {
+    if ancestor == descendant {
+        return Ok(true);
+    }
+    let o = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    match o.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(format!(
+            "git merge-base --is-ancestor {ancestor} {descendant}: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+    }
+}
+
+fn rind_status() -> Result<String, String> {
+    let o = Command::new("git")
+        .arg("-C")
+        .arg(rind_dir())
+        .args(["status", "--porcelain"])
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    if !o.status.success() {
+        return Err(format!(
+            "git status: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&o.stdout)
+        .trim_end_matches(['\n', '\r'])
+        .to_string())
+}
+
+fn require_clean_rind() -> Result<(), String> {
+    let status = rind_status()?;
+    if status.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "rind submodule has uncommitted changes. apply-patches commits them on {PATCH_BRANCH}; build-images and provenance refuse a dirty tree:\n{status}"
+        ))
+    }
+}
+
+fn ensure_rind_repo() -> Result<(), String> {
+    if rind_dir().join(".git").exists() {
+        return Ok(());
+    }
+    git(&root(), &["submodule", "update", "--init", "--", "rind"])?;
+    if rind_dir().join(".git").exists() {
+        Ok(())
+    } else {
+        Err("rind submodule is not checked out".into())
+    }
+}
+
+fn upstream_pin() -> Result<String, String> {
+    git(&root(), &["rev-parse", "HEAD:rind"])
+}
+
+fn rind_head() -> Result<String, String> {
+    git(&rind_dir(), &["rev-parse", "HEAD"])
+}
+
+fn patch_path_name(path: &Path) -> Result<String, String> {
+    path.strip_prefix(patches_dir())
+        .map(|p| p.display().to_string())
+        .map_err(|_| format!("{} is not under patches/", path.display()))
+}
+
+fn base_patch_paths() -> Result<Vec<PathBuf>, String> {
+    let dir = patches_dir();
+    Ok(numbered_patches(&dir)?
+        .into_iter()
+        .map(|n| dir.join(n))
+        .collect())
+}
+
+fn set_patch_paths(set: &str) -> Result<Vec<PathBuf>, String> {
+    let dir = patch_set_dir(set)?;
+    Ok(numbered_patches(&dir)?
+        .into_iter()
+        .map(|n| dir.join(n))
+        .collect())
+}
+
+fn optional_set_names() -> Result<Vec<String>, String> {
+    let dir = patches_dir();
+    let mut names = vec![];
+    for e in std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let e = e.map_err(|e| format!("{}: {e}", dir.display()))?;
+        if !e.file_type().map_err(|e| e.to_string())?.is_dir() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !numbered_patches(&e.path())?.is_empty() {
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Whether `patch` is already in the rind tree (committed or not).
+fn patch_applied(patch: &Path) -> bool {
     Command::new("git")
-        .args(["-C", "rind", "apply", "--reverse", "--check", rel])
-        .current_dir(root())
-        .stderr(std::process::Stdio::null())
+        .arg("-C")
+        .arg(rind_dir())
+        .args(["apply", "--reverse", "--check"])
+        .arg(patch)
+        .stderr(Stdio::null())
+        .stdout(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
 }
 
-fn apply_patches(set: Option<&str>, reverse: bool) -> Result<(), String> {
-    let r = root();
-    sh(&r, None, "git submodule update --init rind", &[])?;
-    let set_patches = match set {
-        Some(set) => {
-            let dir = patch_set_dir(set)?;
-            numbered_patches(&dir)?
-                .into_iter()
-                .map(|p| format!("{set}/{p}"))
-                .collect()
-        }
-        None => vec![],
-    };
-    if reverse {
-        for p in set_patches.iter().rev() {
-            let rel = format!("../patches/{p}");
-            if patch_applied(&rel) {
-                git(&r.join("rind"), &["apply", "--reverse", &rel])?;
-                println!("reversed: patches/{p}");
-            } else {
-                println!("not applied: patches/{p}");
-            }
-        }
+fn for_board(board: Board, name: &str) -> bool {
+    (board == Board::Esp || !name.contains("xtensa"))
+        && (board == Board::Nrf || !name.contains("thumbv7em"))
+}
+
+/// Check out `hardware/applied`. A new branch is created only at the pin, so
+/// a newer upstream checkout is not patched by accident. An existing branch
+/// that is not based on the pin is left alone.
+fn ensure_patch_branch(pin: &str) -> Result<(), String> {
+    let head = rind_head()?;
+    if !is_ancestor(&rind_dir(), pin, &head)? {
+        return Err(format!(
+            "rind HEAD {head} is not the pinned upstream {pin} or a commit on top of it"
+        ));
+    }
+    let cur = git(&rind_dir(), &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if cur == PATCH_BRANCH {
         return Ok(());
     }
-    let base = numbered_patches(&r.join("patches"))?;
-    for p in base.iter().chain(&set_patches) {
-        let rel = format!("../patches/{p}");
-        if patch_applied(&rel) {
-            println!("already applied: patches/{p}");
-        } else {
-            git(&r.join("rind"), &["apply", &rel])?;
-            println!("applied: patches/{p}");
+    let branch_ref = format!("refs/heads/{PATCH_BRANCH}");
+    match git(
+        &rind_dir(),
+        &["rev-parse", "--verify", "--quiet", &branch_ref],
+    ) {
+        Ok(sha) => {
+            let sha = sha.trim();
+            if !is_ancestor(&rind_dir(), pin, sha)? {
+                return Err(format!(
+                    "local branch {PATCH_BRANCH} ({sha}) is not based on pinned upstream {pin}; refusing to overwrite it. Delete it with `git -C rind branch -D {PATCH_BRANCH}` and rerun"
+                ));
+            }
+            if head != pin && head != sha {
+                return Err(format!(
+                    "rind HEAD {head} is neither the pinned upstream {pin} nor {PATCH_BRANCH} ({sha})"
+                ));
+            }
+            git(&rind_dir(), &["switch", "--quiet", PATCH_BRANCH])?;
+        }
+        Err(_) => {
+            if head != pin {
+                return Err(format!(
+                    "rind HEAD {head} is not the pinned upstream {pin}. Check out the pin before apply-patches (`git submodule update --init rind`)"
+                ));
+            }
+            git(&rind_dir(), &["switch", "-c", PATCH_BRANCH])?;
         }
     }
+    require_clean_rind()
+}
+
+fn git_am(patches: &[PathBuf]) -> Result<(), String> {
+    let mut args = vec![
+        "am".to_string(),
+        "--committer-date-is-author-date".to_string(),
+    ];
+    for p in patches {
+        args.push(p.display().to_string());
+    }
+    if let Err(e) = git_identity(&rind_dir(), &args) {
+        let abort = Command::new("git")
+            .arg("-C")
+            .arg(rind_dir())
+            .args(["am", "--abort"])
+            .stdin(Stdio::null())
+            .status();
+        let extra = match abort {
+            Ok(s) if s.success() => "the rind tree was reset to before this series",
+            _ => "git am --abort also failed; inspect rind/",
+        };
+        return Err(format!("{e}; {extra}"));
+    }
+    Ok(())
+}
+
+fn git_apply(patch: &Path, reverse: bool) -> Result<(), String> {
+    let mut args = vec!["apply".to_string()];
+    if reverse {
+        args.push("--reverse".to_string());
+    }
+    args.push(patch.display().to_string());
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    git(&rind_dir(), &borrowed).map(|_| ())
+}
+
+fn worktree_matches(rev: &str) -> Result<bool, String> {
+    let o = Command::new("git")
+        .arg("-C")
+        .arg(rind_dir())
+        .args(["diff", "--quiet", rev])
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    match o.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(format!(
+            "git diff --quiet {rev}: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+    }
+}
+
+/// The base series is committed, no optional set is only partly applied, and
+/// `expect_set` is committed when it is named. Returns `(upstream pin, HEAD)`.
+fn require_rind_tree(expect_set: Option<&str>) -> Result<(String, String), String> {
+    ensure_rind_repo()?;
+    require_clean_rind()?;
+    let commit = upstream_pin()?;
+    let fork_commit = rind_head()?;
+    if !is_ancestor(&rind_dir(), &commit, &fork_commit)? {
+        return Err(format!(
+            "rind HEAD {fork_commit} is not the pinned upstream {commit} or a commit on top of it"
+        ));
+    }
+    for path in base_patch_paths()? {
+        if !patch_applied(&path) {
+            return Err(format!(
+                "patches/{} is not committed in the rind tree; run cargo xtask apply-patches",
+                patch_path_name(&path)?
+            ));
+        }
+    }
+    for set in optional_set_names()? {
+        let paths = set_patch_paths(&set)?;
+        let n = paths.iter().filter(|p| patch_applied(p)).count();
+        if n != 0 && n != paths.len() {
+            return Err(format!(
+                "optional set {set} is only partly in the rind tree; run apply-patches --set {set} or --reverse"
+            ));
+        }
+    }
+    if let Some(set) = expect_set {
+        let paths = set_patch_paths(set)?;
+        if paths.is_empty() {
+            return Err(format!("patch set {set} has no numbered patches"));
+        }
+        if !paths.iter().all(|p| patch_applied(p)) {
+            return Err(format!(
+                "optional set {set} is not committed in the rind tree; run cargo xtask apply-patches --set {set}"
+            ));
+        }
+    }
+    Ok((commit, fork_commit))
+}
+
+/// Base patches, the board's ring vendor patches, and every fully applied
+/// optional set, each with its sha256.
+fn patches_for_board(board: Board) -> Result<Vec<(String, String)>, String> {
+    let mut paths = base_patch_paths()?;
+    let dir = patches_dir();
+    let mut ring = vec![];
+    for e in std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let e = e.map_err(|e| format!("{}: {e}", dir.display()))?;
+        if !e.file_type().map_err(|e| e.to_string())?.is_file() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".patch")
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+            && for_board(board, &name)
+        {
+            ring.push(e.path());
+        }
+    }
+    ring.sort();
+    paths.extend(ring);
+    for set in optional_set_names()? {
+        let set_paths = set_patch_paths(&set)?;
+        if set_paths.iter().all(|p| patch_applied(p)) {
+            paths.extend(set_paths);
+        }
+    }
+    let mut out = vec![];
+    for path in paths {
+        let name = patch_path_name(&path)?;
+        if for_board(board, &name) {
+            out.push((name, sha256_file(&path)?));
+        }
+    }
+    Ok(out)
+}
+
+fn apply_patches(set: Option<&str>, reverse: bool) -> Result<(), String> {
+    ensure_rind_repo()?;
+    require_clean_rind()?;
+    let pin = upstream_pin()?;
+    ensure_patch_branch(&pin)?;
+    require_clean_rind()?;
+    if reverse {
+        let set = set.ok_or_else(|| "--reverse requires --set".to_string())?;
+        return reverse_set(set, &pin);
+    }
+    let mut pending = base_patch_paths()?;
+    if let Some(set) = set {
+        pending.extend(set_patch_paths(set)?);
+    }
+    let pending: Vec<PathBuf> = pending.into_iter().filter(|p| !patch_applied(p)).collect();
+    if pending.is_empty() {
+        println!("already applied at {} (upstream {pin})", rind_head()?);
+        return Ok(());
+    }
+    git_am(&pending)?;
+    require_clean_rind()?;
+    println!(
+        "committed on {PATCH_BRANCH} at {} (upstream {pin})",
+        rind_head()?
+    );
+    Ok(())
+}
+
+fn reverse_set(set: &str, pin: &str) -> Result<(), String> {
+    let patches = set_patch_paths(set)?;
+    if patches.is_empty() {
+        return Err(format!("patch set {set} has no numbered patches"));
+    }
+    let applied = patches.iter().filter(|p| patch_applied(p)).count();
+    if applied == 0 {
+        println!("not applied: patches/{set}");
+        return Ok(());
+    }
+    if applied != patches.len() {
+        return Err(format!(
+            "optional set {set} is only partly in the rind tree; refusing to reverse it"
+        ));
+    }
+    for patch in patches.iter().rev() {
+        if let Err(e) = git_apply(patch, true) {
+            let _ = git(&rind_dir(), &["reset", "--hard", "HEAD"]);
+            return Err(e);
+        }
+    }
+    let log = git(&rind_dir(), &["rev-list", &format!("{pin}..HEAD")])?;
+    let mut candidates: Vec<String> = log.lines().map(str::to_string).collect();
+    candidates.push(pin.to_string());
+    for rev in &candidates {
+        if worktree_matches(rev)? {
+            git(&rind_dir(), &["reset", "--hard", rev])?;
+            println!("restored {PATCH_BRANCH} to {rev} (upstream {pin})");
+            return require_clean_rind();
+        }
+    }
+    git_identity(&rind_dir(), &["add".into(), "-u".into()])?;
+    git_identity(
+        &rind_dir(),
+        &[
+            "commit".into(),
+            "-m".into(),
+            format!("revert(patches): drop optional set {set}"),
+        ],
+    )?;
+    require_clean_rind()?;
+    println!(
+        "committed revert of {set} at {} (upstream {pin})",
+        rind_head()?
+    );
     Ok(())
 }
 
@@ -454,6 +835,7 @@ fn build_images(
     out: &Path,
     pad: Option<usize>,
 ) -> Result<(), String> {
+    require_rind_tree(None)?;
     let dir = crate_dir(board);
     let out = if out.is_absolute() {
         out.to_path_buf()
@@ -535,12 +917,75 @@ fn build_images(
     Ok(())
 }
 
-fn sha256_file(p: &Path) -> Result<String, String> {
-    let d = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
-    Ok(Sha256::digest(&d)
+fn sha256_bytes(d: &[u8]) -> String {
+    Sha256::digest(d)
         .iter()
         .map(|b| format!("{b:02x}"))
-        .collect())
+        .collect()
+}
+
+fn sha256_file(p: &Path) -> Result<String, String> {
+    let d = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    Ok(sha256_bytes(&d))
+}
+
+struct ProvenanceImage {
+    name: String,
+    sha256: String,
+    built: String,
+}
+
+/// The document `cargo xtask provenance` prints. `commit` is the upstream
+/// pin recorded by this repo. `fork_commit` is the rind commit that was
+/// built. Each image's `rind` is that same fork commit.
+fn provenance_json(
+    note: &str,
+    commit: &str,
+    fork_commit: &str,
+    rind_bench: &str,
+    patches: &[(String, String)],
+    ext: &str,
+    images: &[ProvenanceImage],
+) -> String {
+    let mut o = format!(
+        "{{\n \"note\": {},\n \"commit\": {},\n \"fork_commit\": {},\n \"patches\": [\n",
+        json_str(note),
+        json_str(commit),
+        json_str(fork_commit),
+    );
+    if !patches.is_empty() {
+        o += &patches
+            .iter()
+            .map(|(name, sha)| {
+                format!(
+                    "  {{\"name\": {}, \"sha256\": {}}}",
+                    json_str(name),
+                    json_str(sha)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",\n");
+        o += "\n";
+    }
+    o += &format!(" ],\n \"file_ext\": \".{ext}\",\n \"images\": {{\n");
+    let entries: Vec<String> = images
+        .iter()
+        .map(|image| {
+            format!(
+                "  {}: {{\n   \"sha256\": {},\n   \"commit\": {},\n   \"fork_commit\": {},\n   \"rind\": {},\n   \"rind_bench\": {},\n   \"built\": {}\n  }}",
+                json_str(&image.name),
+                json_str(&image.sha256),
+                json_str(commit),
+                json_str(fork_commit),
+                json_str(fork_commit),
+                json_str(rind_bench),
+                json_str(&image.built),
+            )
+        })
+        .collect();
+    o += &entries.join(",\n");
+    o += "\n }\n}";
+    o
 }
 
 fn json_str(s: &str) -> String {
@@ -589,23 +1034,8 @@ fn provenance(
         Board::Esp => "elf",
         Board::Nrf | Board::Rp2040 => "uf2",
     };
-    let rind = git(&root().join("rind"), &["rev-parse", "HEAD"])?;
-    let mut patches: Vec<String> = std::fs::read_dir(root().join("patches"))
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".patch") && (board == Board::Esp || !n.contains("xtensa")))
-        .filter(|n| board == Board::Nrf || !n.contains("thumbv7em"))
-        .collect();
-    patches.sort();
-    if let Some(set) = set {
-        let dir = patch_set_dir(set)?;
-        patches.extend(
-            numbered_patches(&dir)?
-                .into_iter()
-                .map(|p| format!("{set}/{p}")),
-        );
-    }
+    let (commit, fork_commit) = require_rind_tree(set)?;
+    let patches = patches_for_board(board)?;
     let mut names: Vec<String> = std::fs::read_dir(&images)
         .map_err(|e| format!("{}: {e}", images.display()))?
         .flatten()
@@ -613,28 +1043,27 @@ fn provenance(
         .filter_map(|n| n.strip_suffix(&format!(".{ext}")).map(String::from))
         .collect();
     names.sort();
-    let mut o = format!("{{\n \"note\": {},\n \"patches\": [\n", json_str(note));
-    o += &patches
-        .iter()
-        .map(|p| format!("  {}", json_str(p)))
-        .collect::<Vec<_>>()
-        .join(",\n");
-    o += &format!("\n ],\n \"file_ext\": \".{ext}\",\n \"images\": {{\n");
-    let mut entries = vec![];
+    let mut records = vec![];
     for n in &names {
         let p = images.join(format!("{n}.{ext}"));
-        entries.push(format!(
-            "  {}: {{\n   \"sha256\": {},\n   \"rind\": {},\n   \"rind_bench\": {},\n   \"built\": {}\n  }}",
-            json_str(n),
-            json_str(&sha256_file(&p)?),
-            json_str(&rind),
-            json_str(rind_bench),
-            json_str(&local_time(&p))
-        ));
+        records.push(ProvenanceImage {
+            name: n.clone(),
+            sha256: sha256_file(&p)?,
+            built: local_time(&p),
+        });
     }
-    o += &entries.join(",\n");
-    o += "\n }\n}";
-    println!("{o}");
+    println!(
+        "{}",
+        provenance_json(
+            note,
+            &commit,
+            &fork_commit,
+            rind_bench,
+            &patches,
+            ext,
+            &records,
+        )
+    );
     Ok(())
 }
 
@@ -776,5 +1205,50 @@ fn main() -> ExitCode {
             eprintln!("{e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_of_abc() {
+        assert_eq!(
+            sha256_bytes(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn json_str_escapes_quotes_and_backslashes() {
+        assert_eq!(json_str("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    }
+
+    #[test]
+    fn provenance_json_records_upstream_fork_and_patch_hash() {
+        let commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let fork = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let body = provenance_json(
+            "a note",
+            commit,
+            fork,
+            "hw",
+            &[("0001-a.patch".into(), "cc".into())],
+            "elf",
+            &[ProvenanceImage {
+                name: "aes_gcm".into(),
+                sha256: "dd".into(),
+                built: "2026-11-13 00:00 UTC".into(),
+            }],
+        );
+        assert!(body.contains(&format!("\"commit\": \"{commit}\"")));
+        assert!(body.contains(&format!("\"fork_commit\": \"{fork}\"")));
+        assert!(body.contains("\"name\": \"0001-a.patch\""));
+        assert!(body.contains("\"sha256\": \"cc\""));
+        assert!(body.contains(&format!("\"rind\": \"{fork}\"")));
+        assert!(body.contains(&format!(
+            "\"commit\": \"{commit}\",\n   \"fork_commit\": \"{fork}\""
+        )));
     }
 }

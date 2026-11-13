@@ -64,7 +64,7 @@ watchdog reset all set `GPREGRET` to `0x57` and reset into the UF2 drive; openin
 ## Build, flash, run
 
 ```sh
-cargo xtask apply-patches && cargo xtask vendor-ring   # once
+cargo xtask apply-patches && cargo xtask vendor-ring   # once; commits the rind patches
 cargo xtask build-images nrf    # nrf52840/images/<bench>.{elf,bin,uf2}; sources nrf52840/env.sh (Arm GNU Toolchain 14.2.rel1 in .tools)
 cargo xtask build-images nrf --out images-pad1031 --pad 1031   # a relinked set, for layout sensitivity
 # then, from rind-results:

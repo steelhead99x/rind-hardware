@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# For Espressif's QEMU only (correctness, never timing): the console on
+# UART0, which `qemu-system-xtensa -nographic` connects, instead of the USB
+# Serial/JTAG port it does not emulate. Layered after sdkconfig.defaults.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

@@ -86,16 +86,17 @@ images (only `qemu-system-xtensa` is vendored here), so this port ships as a
 build and a UF2; known-answer checks run on the board after a flash.
 
 First hardware run, 2026-11-12: a Raspberry Pi Pico (12 MHz crystal,
-W25Q080-compatible flash), flashed with `picotool load -x`; every
-known-answer check passed on all twelve images. The numbers are in
-rind-results, `results/rp2040/`.
+W25Q080-compatible flash). Every known-answer check passed on all twelve
+images. Published timing results are not yet in rind-results (there is no
+`results/rp2040/` tree on that repo's main); do not claim they are there
+until they land.
 
 ## Build
 
 ```sh
-cargo xtask apply-patches
+cargo xtask apply-patches   # commits onto rind's hardware/applied branch
 cargo xtask build-images rp2040    # rp2040/images/<bench>.{elf,bin,uf2}; sources rp2040/env.sh
-cargo xtask provenance rp2040 --rind-bench <commit> --note "rp2040 build"
+cargo xtask provenance rp2040 --rind-bench <commit> --note "rp2040 build"   # refuses a dirty rind tree
 ```
 
 `cargo xtask uf2 IMAGE.bin OUT.uf2 --base 0x10000000 --family 0xe48bff56` writes

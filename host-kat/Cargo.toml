@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# The boards' known-answer checks (esp32/src/vectors.rs, unchanged) on a Linux
+# host, plus the host-only libraries (aws-lc-rs, graviola, OpenSSL) checked
+# against the same vectors and rind's outputs. Run before timing a host.
+[package]
+name = "rind-bench-host-kat"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR ISC OR MIT-0"
+
+[workspace]
+
+[features]
+default = ["aes_gcm", "chacha20poly1305", "xchacha20poly1305", "cipher", "x25519", "p256", "ed25519", "sha2", "sha3", "hmac", "hkdf", "mlkem768"]
+aes_gcm = []
+chacha20poly1305 = []
+xchacha20poly1305 = []
+cipher = []
+x25519 = []
+p256 = []
+ed25519 = []
+sha2 = []
+sha3 = []
+hmac = []
+hkdf = []
+mlkem768 = []
+
+[dependencies]
+# vectors.rs calls `criterion::emit` and `criterion::exclude`.
+criterion = { path = "shim", package = "rind-bench-host-kat-shim" }
+rind = { path = "../rind/rind" }
+aes-gcm = "0.11"
+aws-lc-rs = { version = "1.19", features = ["non-fips"], default-features = false }
+chacha20poly1305 = "0.11"
+ed25519-dalek = { version = "3", features = ["alloc", "pkcs8", "rand_core"] }
+getrandom = { version = "0.4", features = ["sys_rng"] }
+graviola = "0.4"
+hkdf = "0.13"
+hmac = "0.13"
+libcrux-aes = "0.0.10"
+libcrux-chacha20poly1305 = "0.0.10"
+libcrux-ecdh = "0.0.9"
+libcrux-ed25519 = { version = "0.0.10", features = ["rand"] }
+libcrux-hmac = "0.0.9"
+libcrux-ml-kem = { version = "0.0.11", default-features = false, features = ["mlkem768", "alloc"] }
+libcrux-sha2 = "0.0.9"
+libcrux-sha3 = "0.0.11"
+ml-kem = { version = "0.3", features = ["getrandom"] }
+openssl = "0.10"
+p256 = { version = "0.14", features = ["ecdh", "getrandom"] }
+ring = "0.17"
+sha2 = "0.11"
+sha3 = "0.12"
+x25519-dalek = { version = "3", features = ["getrandom"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(espidf_time64)'] }

@@ -1,0 +1,16 @@
+# Firmware images built 2026-11-12 16:27-16:52 PST (America/Los_Angeles).
+# Gitignored build artifacts; not in this repository. Verify after a local
+# rebuild, or against a copy of these files, from the repository root:
+#   sha256sum -c patches/poly1305-32/SHA256SUMS
+4c6ce5d5dc3e40068b6694cda269492963229d8a8d68a5cc0a7f56f3986ad58a  esp32/images-poly1305-32/chacha20poly1305.elf
+65d8b8884d938c390d1e08b147a8110e86087ab5b237a7071c849d666a4d37a9  esp32/images-poly1305-32/xchacha20poly1305.elf
+0ff96fdc84eb56ce927964ff7ecbe6b27d7e08c8c4e7dd4b4af634ba17c93f50  esp32/images-poly1305-32-base/chacha20poly1305.elf
+b3e48a9f164914f52c00e240f5d70eb0393e9f07ca47d58c1c6f410b7b8d1484  esp32/images-poly1305-32-base/xchacha20poly1305.elf
+321d76f5d873b9f73275923f8e14f427f9dbe33e461880260eb4789fddb994f2  nrf52840/images-poly1305-32/chacha20poly1305.elf
+6ee6365fe52b03b75cbdcb649eab79f69c1f0f6359aca6d68a983260d4bf817c  nrf52840/images-poly1305-32/xchacha20poly1305.elf
+98ee3da1ef2055e1d8cb10bfb3bf9cdada626f97f9008fb5a2331aa39e9963de  nrf52840/images-poly1305-32/chacha20poly1305.uf2
+de180373221f762cdcff4299a4ac9fd17f887be05af6f7926a5ab3bde584919e  nrf52840/images-poly1305-32/xchacha20poly1305.uf2
+dc0b1e110377a57c5221f3ffea8fd0264d31fa904003a77429376b1ba5c21353  nrf52840/images-poly1305-32-base/chacha20poly1305.elf
+4eba6d1233fe70259adcd54a1b1804ef59642d96730ef328e19e4bbe80abfeda  nrf52840/images-poly1305-32-base/xchacha20poly1305.elf
+e48da3d89d91a949c383457f103898512edd3175fcd2265c5331c2013fcbf52f  nrf52840/images-poly1305-32-base/chacha20poly1305.uf2
+1e05845983051f5495c78ce8824a283714f40ff615a66e1501363c3c6327dc35  nrf52840/images-poly1305-32-base/xchacha20poly1305.uf2

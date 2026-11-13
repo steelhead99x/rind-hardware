@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0 -->
 # poly1305-32: a 32-bit-limb Poly1305 for rind's portable backend
 
-An optional patch set, not in the published images. `0005-...patch` is written as an upstream
+An optional patch set, not in the published images. `0006-...patch` is written as an upstream
 rind PR (`feat(portable): Poly1305 in 26-bit limbs on 32-bit targets`); it applies on top of
-patches 0001-0004 at rind `98568332`.
+patches 0001-0005 at rind `98568332`. (It was written as 0005, before `0005-feat-reuse-cache-...`
+landed, and renumbered; the content is unchanged.)
 
 ## Why
 
@@ -37,7 +38,7 @@ Poly1305 (libcrux-poly1305), whose 26-bit limbs are stored in `u64`s, so a 32-bi
 | forced `--cfg rind_portable` (64-bit limbs), poly1305 tests incl. differential vs HACL* | passed |
 | clippy `-D warnings`: native all-targets, forced portable 64-bit and 32-limb all-targets, thumbv7em-none-eabihf, riscv32imac-unknown-none-elf, armv7-unknown-linux-gnueabihf | clean |
 | xtensa-esp32s3-espidf (esp toolchain) | builds. Clippy reports the same 3 errors with and without the patch (`mid/mldsa.rs`, `low/cpu.rs`, `low/entry.rs`, from patch 0003 and the esp toolchain's older clippy), none in this patch |
-| riscv32imc-unknown-none-elf, thumbv6m-none-eabi | fail with and without the patch: `low/generic/reuse_cache.rs` needs atomic compare-and-swap (the open RP2040 item) |
+| riscv32imc-unknown-none-elf, thumbv6m-none-eabi | clippy clean with base patch 0005 (`ReuseCache` without CAS) applied; without it they fail in `reuse_cache.rs` with or without this patch |
 
 Wycheproof caught a bound that an earlier draft's debug assertion set too tight (h1 can reach
 2^27 + 2^6). The arithmetic was right; the assertion and its comment were fixed.
@@ -79,7 +80,9 @@ xtensa-esp32s3-elf-gdb -q -batch -ex 'target remote :1240' -ex 'hbreak *(adc_hw_
 ## Images (built, not flashed)
 
 Built 2026-11-12 16:27-16:52 PST from rind `98568332` with patches 0001-0004, using the same tree
-and toolchain for both. `-base` leaves out `poly1305-32` and is the A/B baseline from the
+and toolchain for both. Base patch 0005 landed afterwards. It changes only code under
+`cfg(not(target_has_atomic = "ptr"))`, and both chips have pointer-width atomics, so rind's code in
+these images matches a 0001-0005 build. `-base` leaves out `poly1305-32` and is the A/B baseline from the
 same build. Each folder has `SHA256SUMS` and `images.json` (provenance).
 
 | Image | sha256 |

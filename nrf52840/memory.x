@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0 */
-/* nRF52840 with Seeed's T1000-E layout: MBR and the S140 7.3.0 SoftDevice
-   below 0x27000, the application from 0x27000, and from 0xED000 Meshtastic's
-   LittleFS (its config and keys) and the UF2 bootloader at 0xF4000, which
-   this image must never reach. The SoftDevice is never enabled, so RAM is
-   ours but for the first KB, left alone for the MBR. */
+/* nRF52840 on the Arduino Nano 33 BLE with its stock BOSSA bootloader.
+   The bootloader occupies 0x00000-0x10000 and must never be written.
+   The application starts at 0x10000, which is where the bootloader jumps
+   and where `bossac --offset 0x10000` programs the image. There is no
+   SoftDevice and no trailing UF2 bootloader (this is not the T1000-E
+   layout). RAM skips the first 512 bytes, matching ArduinoCore-mbed's
+   official linker script (RAM_NVIC + RAM_CRASH_DATA). */
 MEMORY
 {
-  FLASH : ORIGIN = 0x00027000, LENGTH = 0xED000 - 0x27000
-  RAM   : ORIGIN = 0x20000400, LENGTH = 256K - 1K
+  FLASH : ORIGIN = 0x00010000, LENGTH = 0xF0000
+  RAM   : ORIGIN = 0x20000200, LENGTH = 0x40000 - 0x200
 }

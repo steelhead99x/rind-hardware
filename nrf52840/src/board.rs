@@ -9,7 +9,7 @@
 //! writes UICR, flash, or the SoftDevice; it only reads POWER.RESETREAS and
 //! NRF_WDT (RUNSTATUS, CRV, RREN), writes the watchdog reload registers when
 //! Meshtastic left the hardware watchdog running, and writes POWER.GPREGRET,
-//! which the bootloader reads after a reset.
+//! which the Arduino BOSSA bootloader reads after a reset (0xB0).
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_nrf::pac;
@@ -17,9 +17,10 @@ use embassy_nrf::pac;
 /// The nRF52840's CPU clock, fixed.
 pub const CPU_HZ: u64 = 64_000_000;
 
-/// Adafruit's nRF52 bootloader enters UF2 mass-storage mode after a reset
-/// with this in GPREGRET (`DFU_MAGIC_UF2_RESET`).
-const DFU_MAGIC_UF2_RESET: u32 = 0x57;
+/// Arduino's nRF52 BOSSA bootloader enters serial (SAM-BA) DFU after a
+/// reset with this in GPREGRET (`DFU_MAGIC_SERIAL_ONLY_RESET` in
+/// ArduinoCore-mbed `variants/ARDUINO_NANO33BLE/pins_arduino.h`).
+const DFU_MAGIC_SERIAL_ONLY_RESET: u32 = 0xB0;
 
 /// RESETREAS bits: watchdog, CPU lockup.
 const RESETREAS_DOG: u32 = 1 << 1;
@@ -116,11 +117,13 @@ pub fn feed_wdt() {
     }
 }
 
-/// Resets into the UF2 bootloader, whose drive takes the next image.
+/// Resets into the Arduino BOSSA bootloader, which then accepts a
+/// `bossac --offset 0x10000` upload. The 1200-baud touch on the CDC
+/// port ends here; a double-tap of the reset button does the same.
 pub fn enter_bootloader() -> ! {
     pac::POWER
         .gpregret()
-        .write_value(pac::power::regs::Gpregret(DFU_MAGIC_UF2_RESET));
+        .write_value(pac::power::regs::Gpregret(DFU_MAGIC_SERIAL_ONLY_RESET));
     cortex_m::peripheral::SCB::sys_reset()
 }
 
@@ -134,9 +137,28 @@ pub fn init() -> embassy_nrf::Peripherals {
 
     // SAFETY: called once, before anything else takes core peripherals.
     let mut core = unsafe { cortex_m::Peripherals::steal() };
+    // TRCENA is required for DWT_CYCCNT. TRACECONFIG (SWO) stays off: on
+    // this board the I2C pull-up is on the SWO pin (Arduino errata in
+    // `initVariant`), and the benches do not use SWO or I2C.
     core.DCB.enable_trace();
     core.DWT.set_cycle_count(0);
     core.DWT.enable_cycle_counter();
+    // CLOCK.TRACECONFIG at 0x4000055C; a zero value disables the trace pins.
+    // SAFETY: a single write to a well-known CLOCK register, before any
+    // other user of the clock block reconfigures it.
+    unsafe { (0x4000_055C as *mut u32).write_volatile(0) };
+
+    // The Arduino bootloader enables RTC1 COMPARE[0], which this firmware
+    // does not handle (`embassy_nrf::init` is never called). Disable the
+    // event and the interrupt so an unexpected COMPARE does not stick the
+    // core in an unhandled IRQ (ArduinoCore-mbed `initVariant`).
+    // RTC1 base 0x40011000; INTENCLR 0x308, EVTENCLR 0x348; COMPARE[0] is bit 16.
+    // SAFETY: one-time start-up writes that only clear leftover bootloader
+    // enables; this firmware never uses RTC1.
+    unsafe {
+        (0x4001_1308 as *mut u32).write_volatile(1 << 16);
+        (0x4001_1348 as *mut u32).write_volatile(1 << 16);
+    }
 
     // SAFETY: `embassy_nrf::init` is never called (see above), so nothing else
     // holds these singletons; only USBD and SWI0 are used.

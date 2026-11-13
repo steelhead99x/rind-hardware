@@ -4,7 +4,7 @@
 //! executor, so it answers the host while a benchmark runs in thread mode, but
 //! [`write_and_flush`] returns only once the host has every byte, so no
 //! transfer overlaps a timed region. Closing the port after opening it at 1200
-//! baud enters the bootloader, as on Arduino and Meshtastic boards; doing the
+//! baud enters the Arduino BOSSA bootloader; doing the
 //! same at 300 baud restarts the firmware, which is how a capture starts each
 //! run from a fresh boot. The run starts only once the host sends [`GO`]:
 //! opening the port is not enough, since ModemManager and the like open new
@@ -65,8 +65,8 @@ async fn usb_main(usbd: embassy_nrf::Peri<'static, peripherals::USBD>) {
 
     let mut config = embassy_usb::Config::new(0x1209, 0x0001);
     config.manufacturer = Some("rind-bench");
-    config.product = Some("rind-bench nRF52840");
-    config.serial_number = Some("rind-bench");
+    config.product = Some("rind-bench Nano 33 BLE");
+    config.serial_number = Some("nano33ble");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
 

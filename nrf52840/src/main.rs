@@ -2,14 +2,14 @@
 
 //! rind-bench's benches, compiled from `rind/rind-bench/benches` (see
 //! `build.rs` for the one mechanical change), run bare metal on an nRF52840
-//! (a Seeed T1000-E) and printed as `RB:` JSON lines over USB CDC-ACM.
+//! (an Arduino Nano 33 BLE) and printed as `RB:` JSON lines over USB CDC-ACM.
 //!
 //! The benchmarks run in thread mode, timed with the Cortex-M4's DWT cycle
 //! counter at 64 MHz. USB runs at interrupt priority on its own executor, and
 //! each line is flushed to the host before the next benchmark starts, so no
 //! USB transfer overlaps a timed region. A 1200-baud "touch" of the port, a
-//! panic, a fault, or a lockup reset enters the UF2 bootloader, so the board
-//! can always be reflashed without its button.
+//! panic, a fault, or a lockup reset enters the Arduino BOSSA bootloader, so the board
+//! can always be reflashed without its button (a double-tap of reset also works).
 
 #![no_std]
 #![no_main]
@@ -134,7 +134,7 @@ fn main() -> ! {
     }
     criterion::emit(&format!(
         concat!(
-            "{{\"type\":\"start\",\"chip\":\"nrf52840\",\"board\":\"seeed-t1000-e\",",
+            "{{\"type\":\"start\",\"chip\":\"nrf52840\",\"board\":\"arduino-nano-33-ble\",",
             "\"cpu_hz\":{},\"rind_backend\":\"portable\",\"profile\":\"{}\",",
             "\"icache\":{},\"heap\":{},\"reset_reason\":\"{:#x}\",",
             "\"wdt_runstatus\":{},\"wdt_crv\":{},\"wdt_rren\":\"{:#x}\",",

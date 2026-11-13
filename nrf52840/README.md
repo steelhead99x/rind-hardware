@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0 -->
-# rind-hardware: nRF52840 (Seeed T1000-E)
+# rind-hardware: nRF52840 (Arduino Nano 33 BLE)
 
-The same eleven rind-bench bench files as [the ESP32-S3 port](../README.md), built for
-`thumbv7em-none-eabihf` and run bare metal on the Nordic nRF52840 (Cortex-M4F, 64 MHz) inside a
-Seeed SenseCAP T1000-E tracker, through its stock UF2 bootloader. Results:
-[rind-results/results/nrf52840](https://github.com/steelhead99x/rind-results/tree/main/results/nrf52840).
+The same rind-bench bench files as [the ESP32-S3 port](../README.md), built for
+`thumbv7em-none-eabihf` and run bare metal on the Nordic nRF52840 (Cortex-M4F, 64 MHz) of an
+Arduino Nano 33 BLE, through its stock BOSSA bootloader. This branch is the T1000-E port
+adapted for that board's flash map. Same-chip numbers from the Seeed T1000-E live in
+[rind-results/results/nrf52840](https://github.com/steelhead99x/rind-results/tree/main/results/nrf52840);
+Nano 33 BLE results go to `results/nano33ble` on a `results/nano33ble-<date>` branch.
 
 ## What runs
 
@@ -48,27 +50,38 @@ Seeed SenseCAP T1000-E tracker, through its stock UF2 bootloader. Results:
 
 ## Flash layout and what is never touched
 
+This matches ArduinoCore-mbed's official Nano 33 BLE linker script
+(`variants/ARDUINO_NANO33BLE/linker_script.ld`): the application starts at `0x10000`, and
+`bossac` is always invoked with `--offset 0x10000`. There is no SoftDevice and no trailing
+UF2 bootloader. RAM starts at `0x20000200` (the first 512 bytes are left alone, as in that
+script's `RAM_NVIC` and `RAM_CRASH_DATA` regions).
+
 | Range | Contents | Touched? |
 |---|---|---|
-| `0x00000`-`0x27000` | MBR and the S140 7.3.0 SoftDevice | never |
-| `0x27000`-`0xED000` | application | the image (`memory.x`); `cargo xtask uf2` refuses anything outside it |
-| `0xED000`-`0xF4000` | the application's LittleFS (Meshtastic's config, keys and node DB) | never |
-| `0xF4000`- | Adafruit nRF52 UF2 bootloader 0.9.1 and its settings | never |
+| `0x00000`-`0x10000` | Arduino BOSSA bootloader | never |
+| `0x10000`-`0x100000` | application | the image (`memory.x`); flash only with `bossac --offset 0x10000` |
 | UICR | reset pin, NFC pins, APPROTECT | never: `embassy_nrf::init` is not called, since it writes UICR |
 
 The firmware never writes flash itself, and every way out of it leads back to the bootloader: a
-panic, a usage, bus or memory fault (reported over USB first), a HardFault, or a lockup or
-watchdog reset all set `GPREGRET` to `0x57` and reset into the UF2 drive; opening the port at
-1200 baud and closing it does the same, and at 300 baud restarts the firmware for the next run.
+panic, a usage, bus or memory fault (reported over USB first), a HardFault, or a lockup reset
+all set `GPREGRET` to `0xB0` (`DFU_MAGIC_SERIAL_ONLY_RESET` in ArduinoCore-mbed) and reset into
+the BOSSA bootloader; opening the port at 1200 baud and closing it does the same, and at 300 baud
+restarts the firmware for the next run. A double-tap of the reset button also enters the
+bootloader if the 1200-baud touch cannot.
 
 ## Build, flash, run
 
 ```sh
 cargo xtask apply-patches && cargo xtask vendor-ring   # once
-cargo xtask build-images nrf    # nrf52840/images/<bench>.{elf,bin,uf2}; sources nrf52840/env.sh (Arm GNU Toolchain 14.2.rel1 in .tools)
-cargo xtask build-images nrf --out images-pad1031 --pad 1031   # a relinked set, for layout sensitivity
-# then, from rind-results:
-cargo xtask run-all-nrf ../rind-hardware/nrf52840/images    # 1200-baud touch, copy the UF2, 3 runs each
+# Build .elf/.bin only (no UF2): source nrf52840/env.sh (Arm GNU Toolchain 14.2.rel1 in .tools)
+# and cargo build --release --features <bench>, then
+# arm-none-eabi-objcopy -O binary -j .vector_table -j .text -j .rodata -j .data <elf> <bin>
+# Confirm the ELF has no LOAD segment below 0x10000, then:
+bossac --port <bootloader-cu> -U -e -w -v -R --offset=0x10000 <bench>.bin
+# Enter the bootloader first with a 1200-baud touch of the firmware (or Arduino) CDC port,
+# or by double-tapping reset. Identify the board by its USB port; do not open other devices.
+# Then, from rind-results, at least five runs per image:
+cargo xtask capture-nrf --port <firmware-cu> --runs 5 --out results/raw-nano33ble/<bench>
 ```
 
 `cargo xtask capture-nrf` waits 15 s after the port appears before it sends `rind-bench:go`:
@@ -76,9 +89,12 @@ ModemManager opens new serial ports to probe them, and while it does, it reads s
 output (an early run lost its first lines and then dropped off USB that way). The firmware starts only on
 that line, and a run whose first record is not the start record is marked failed.
 
-## On the T1000-E
+## On the T1000-E (not this branch)
 
-The board belongs to a Meshtastic node, so a run is bracketed by a backup and a restore:
+The Nano 33 BLE has no Meshtastic firmware to restore. The notes below describe the T1000-E
+port this branch was adapted from, and are kept so the two layouts are not confused.
+
+The T1000-E board belongs to a Meshtastic node, so a run is bracketed by a backup and a restore:
 
 1. Stop any host software holding the node's serial port, then export the node's config and
    `--info`.

@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0 OR ISC OR MIT-0"
 publish = false
-description = "rind-bench's benches as bare-metal nRF52840 firmware (Seeed T1000-E), flashed as UF2"
+description = "rind-bench's benches as bare-metal nRF52840 firmware (Arduino Nano 33 BLE), flashed with bossac at 0x10000"
 
 [[bin]]
 name = "rind-bench-nrf52840"

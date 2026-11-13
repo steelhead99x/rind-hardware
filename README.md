@@ -99,10 +99,12 @@ What an upstream PR would contain, smallest first. None has been opened.
    recipe, and an `esp32s3` host for `admin/bench-report` (rind-results' `cargo xtask report`
    already writes its schema-1 JSON).
 5. A separate PR, now that the ESP32-S3 and nRF52840 have confirmed it is faster at every
-   size: `patches/poly1305-32/0006-feat-portable-Poly1305-in-26-bit-limbs-on-32-bit-tar.patch`,
+   size: `patches/poly1305-32/0001-feat-portable-Poly1305-in-26-bit-limbs-on-32-bit-tar.patch`,
    a portable Poly1305 in five 26-bit `u32` limbs (poly1305-donna-32's radix) for 32-bit
-   targets, in place of HACL*'s, whose 26-bit limbs live in `u64`s. It is not in the
-   published images. Hardware A/B (2026-11-12, 21/21 known-answer checks on both boards):
+   targets, in place of HACL*'s, whose 26-bit limbs live in `u64`s. Optional sets are
+   numbered from `0001` inside their own directory, so this is not a sixth base patch;
+   see [patches/README.md](patches/README.md). It is not in the published images.
+   Hardware A/B (2026-11-12, 21/21 known-answer checks on both boards):
    ChaCha20-Poly1305 seal of 16 KB is 0.735× the previous cycles on the ESP32-S3 and
    0.698× on the T1000-E; XChaCha20-Poly1305 16 KB is 0.719× and 0.763×. The gain is
    against rind's previous Poly1305, not against ring. See

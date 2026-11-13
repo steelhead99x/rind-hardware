@@ -78,6 +78,12 @@ There is no official QEMU machine for the RP2040 with enough RAM to run these
 images (only `qemu-system-xtensa` is vendored here), so this port ships as a
 build and a UF2; known-answer checks run on the board after a flash.
 
+First hardware run, 2026-11-12: a Raspberry Pi Pico (12 MHz crystal,
+W25Q080-compatible flash). Every known-answer check passed on all twelve
+images. Published timing results are not yet in rind-results (there is no
+`results/rp2040/` tree on that repo's main); do not claim they are there
+until they land.
+
 ## Build
 
 ```sh

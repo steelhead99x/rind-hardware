@@ -149,5 +149,29 @@ cargo xtask compare $D/raw-base $D/raw chacha20poly1305 xchacha20poly1305 \
   --label-a hacl --label-b poly1305-32 --out $D/compare.md
 ```
 
-The upstream PR goes ahead only if seal and open are faster at every size on both boards
-(AGENTS.md: a verified source gives way only to a faster one).
+## Hardware A/B verdict (2026-11-12, America/Los_Angeles)
+
+Both boards ran the pre-built images whose sha256 is in [SHA256SUMS](SHA256SUMS)
+(`sha256sum -c` matched; they were not rebuilt). 3 runs of each of
+`chacha20poly1305` and `xchacha20poly1305`, baseline then poly1305-32. Every
+known-answer check passed (21/21 on both images, both benches, both boards).
+
+Rind is faster at every size the benches report. The gain is against rind's
+previous HACL* Poly1305, not against ring. 16 KB first:
+
+| Row | ESP32-S3 B/A | T1000-E B/A |
+|---|---:|---:|
+| ChaCha20-Poly1305 seal 16 KB | 0.735 | 0.698 |
+| ChaCha20-Poly1305 open 16 KB | 0.737 | 0.705 |
+| XChaCha20-Poly1305 16 KB | 0.719 | 0.763 |
+| ChaCha20-Poly1305 seal 32 B | 0.696 | 0.658 |
+| XChaCha20-Poly1305 32 B | 0.490 | 0.987 |
+
+On the ESP32-S3, ring and rustcrypto stayed at 1.000; libcrux short-input rows
+moved with code layout (16 KB cache), not a change to libcrux. On the T1000-E,
+libcrux, ring and rustcrypto stayed at 1.00 (within about 1%).
+
+Full tables: [ESP32-S3](https://github.com/steelhead99x/rind-results/tree/main/results/esp32s3/diag/poly1305-32)
+and [T1000-E](https://github.com/steelhead99x/rind-results/tree/main/results/nrf52840/diag/poly1305-32).
+This meets the "faster at every size on both boards" bar for an upstream PR.
+No upstream PR or issue has been opened.

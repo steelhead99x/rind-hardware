@@ -35,6 +35,9 @@ const SYST_CSR_ENABLE: u32 = 1;
 const SYST_CSR_TICKINT: u32 = 1 << 1;
 const SYST_CSR_CLKSOURCE: u32 = 1 << 2;
 const SYST_CSR_COUNTFLAG: u32 = 1 << 16;
+/// SCB ICSR and its PENDSTCLR bit (write 1 to clear a pending SysTick).
+const SCB_ICSR: *mut u32 = 0xE000_ED04 as *mut u32;
+const SCB_ICSR_PENDSTCLR: u32 = 1 << 25;
 
 /// Resets into the USB UF2 bootloader (BOOTSEL), whose drive takes the next
 /// image. `gpio_activity_pin_mask` and `disable_interface_mask` are 0, as on
@@ -85,18 +88,29 @@ pub fn xip_cache_enabled() -> bool {
 }
 
 /// Processor cycles since start-up, wrapping at 2^32. 1 count is 1 cycle.
+///
+/// COUNTFLAG is set by every SysTick wrap and cleared only by reading CSR.
+/// Exactly one of two places accounts for each wrap, and reads CSR to
+/// consume its COUNTFLAG: the SysTick handler, or this function when the
+/// wrap happens while it has interrupts masked (it then also clears the
+/// pending exception, so the handler does not count the wrap again).
 pub fn cycles() -> u32 {
     critical_section::with(|cs| {
-        // SAFETY: SysTick CVR and CSR, the latter's COUNTFLAG read also
-        // clears that bit; the NVIC pending bit is separate and the
-        // handler still runs on exit, so OVERFLOWS catches up.
-        let current = unsafe { SYST_CVR.read_volatile() };
-        let flag = unsafe { SYST_CSR.read_volatile() } & SYST_CSR_COUNTFLAG != 0;
-        let mut high = OVERFLOWS.borrow(cs).get();
-        if flag {
-            high = high.wrapping_add(1);
+        let overflows = OVERFLOWS.borrow(cs);
+        // SAFETY: SysTick CVR and CSR (the CSR read clears COUNTFLAG), and
+        // ICSR's write-one PENDSTCLR bit, which only clears a pending SysTick.
+        let mut current = unsafe { SYST_CVR.read_volatile() };
+        if unsafe { SYST_CSR.read_volatile() } & SYST_CSR_COUNTFLAG != 0 {
+            // Wrapped since the handler last ran, and the handler has not
+            // run: count it here. CVR may have been read before the wrap,
+            // so read it again.
+            overflows.set(overflows.get().wrapping_add(1));
+            unsafe { SCB_ICSR.write_volatile(SCB_ICSR_PENDSTCLR) };
+            current = unsafe { SYST_CVR.read_volatile() };
         }
-        high.wrapping_mul(0x0100_0000)
+        overflows
+            .get()
+            .wrapping_mul(0x0100_0000)
             .wrapping_add(0x00FF_FFFF - current)
     })
 }
@@ -106,13 +120,15 @@ pub fn timer_us() -> u64 {
     embassy_time::Instant::now().as_micros()
 }
 
-/// Compares SysTick with the 1 MHz TIMER over about 10 ms of busy-wait.
-/// Returns (systick cycles, timer microseconds). At 125 MHz the two should
-/// agree to within a few microseconds (the TIMER's resolution).
+/// Compares SysTick with the 1 MHz TIMER over about 300 ms of busy-wait,
+/// which spans at least two SysTick wraps, so a lost or doubled wrap shows
+/// up as a 2^24-cycle (134 ms) disagreement. Returns (systick cycles, timer
+/// microseconds). At 125 MHz the two should agree to within a few
+/// microseconds (the TIMER's resolution).
 pub fn cross_check() -> (u32, u64) {
     let t0 = timer_us();
     let c0 = cycles();
-    let wait = (cpu_hz() / 100) as u32;
+    let wait = (cpu_hz() * 3 / 10) as u32;
     while cycles().wrapping_sub(c0) < wait {}
     (cycles().wrapping_sub(c0), timer_us().saturating_sub(t0))
 }
@@ -120,6 +136,9 @@ pub fn cross_check() -> (u32, u64) {
 #[cortex_m_rt::exception]
 fn SysTick() {
     critical_section::with(|cs| {
+        // SAFETY: reading CSR clears COUNTFLAG, so `cycles` does not count
+        // this wrap a second time.
+        let _ = unsafe { SYST_CSR.read_volatile() };
         let c = OVERFLOWS.borrow(cs);
         c.set(c.get().wrapping_add(1));
     });

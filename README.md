@@ -24,10 +24,10 @@ repo holds only the firmware and the upstream-ready port.
 | Path | What it is | Upstream? |
 |---|---|---|
 | `rind/` | Submodule: upstream `moq-dev/rind`, pinned at `98568332` (main, 2026-11-12) | upstream |
-| `patches/` | Numbered patches against rind this port needs, as `git format-patch` output, including `0003` (no_std) and `0005` (`ReuseCache` without CAS) | **the upstream PR** |
+| `patches/` | Numbered patches against rind this port needs, as `git format-patch` output, including `0003` (no_std) and `0005` (`ReuseCache` without CAS); optional patch sets in subdirectories (`patches/poly1305-32/`), applied only with `cargo xtask apply-patches --set <name>` | **the upstream PR** |
 | `nrf52840/` | The nRF52840 (T1000-E) firmware, `thumbv7em-none-eabihf` | [nrf52840/README.md](nrf52840/README.md) |
 | `rp2040/` | The RP2040 (Pico) firmware, `thumbv6m-none-eabi`; builds and is ready for hardware | [rp2040/README.md](rp2040/README.md) |
-| `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (idempotent), `vendor-ring`, `build-images`, `provenance`, `check`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
+| `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (idempotent; `--set` adds an optional patch set, `--reverse` takes it out), `vendor-ring`, `build-images`, `provenance`, `check`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
 | `criterion-esp/` | A criterion API shim, renamed to `criterion`: the bench files' `criterion::*` calls time with the core's cycle counter and print JSON | maybe, as a dev tool |
 | `esp32/` | The ESP-IDF firmware: compiles the bench files with `#[path]`, runs known-answer checks, the hardware AES/SHA baseline | maybe, under `rind-bench/esp32` |
 | `demo/` | The OLED demo screens (`oled-ui`) and their firmware glue, behind the `oled` feature | no |
@@ -81,6 +81,12 @@ What an upstream PR would contain, smallest first. None has been opened.
 4. Optionally, `criterion-esp/` and `esp32/` as `rind-bench/esp32/`, with a `just bench-esp32`
    recipe, and an `esp32s3` host for `admin/bench-report` (rind-results' `cargo xtask report`
    already writes its schema-1 JSON).
+5. A separate PR, once the ESP32-S3 and nRF52840 confirm it is faster:
+   `patches/poly1305-32/0006-feat-portable-Poly1305-in-26-bit-limbs-on-32-bit-tar.patch`, a
+   portable Poly1305 in five 26-bit `u32` limbs (poly1305-donna-32's radix) for 32-bit targets,
+   in place of HACL*'s, whose 26-bit limbs live in `u64`s. It is not in the published images;
+   [patches/poly1305-32/README.md](patches/poly1305-32/README.md) has its tests, the images built
+   with it, and the steps to run them.
 
 ## Build and run
 

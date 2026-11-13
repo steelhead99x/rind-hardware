@@ -57,8 +57,16 @@ enum Cmd {
         #[arg(long, env = "CHECK_CLEAN")]
         clean: bool,
     },
-    /// Apply patches/[0-9]*.patch to the rind submodule's working tree (an applied patch is skipped)
-    ApplyPatches,
+    /// Apply patches/[0-9]*.patch to the rind submodule's working tree (an applied patch is skipped),
+    /// then with --set the optional patch set patches/<set>/[0-9]*.patch
+    ApplyPatches {
+        /// an optional patch set, a directory under patches/ such as poly1305-32
+        #[arg(long)]
+        set: Option<String>,
+        /// take the set back out (newest patch first), leaving the base patches applied
+        #[arg(long, requires = "set")]
+        reverse: bool,
+    },
     /// Copy ring 0.17.14 from cargo's registry into .tools/ring-{nrf,esp} and patch it
     VendorRing,
     /// Build one image per bench file into <board>/<out>/<bench>.elf (and .bin, .uf2 for the nRF52840 and RP2040)
@@ -82,6 +90,9 @@ enum Cmd {
         rind_bench: String,
         #[arg(long)]
         note: String,
+        /// the optional patch set (under patches/) the images were built with
+        #[arg(long)]
+        set: Option<String>,
     },
     /// Write a raw image as a UF2 (nRF52840 app region or RP2040 XIP), or inspect one
     Uf2 {
@@ -304,25 +315,76 @@ fn check(clean: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_patches() -> Result<(), String> {
-    let r = root();
-    sh(&r, None, "git submodule update --init rind", &[])?;
-    let mut patches: Vec<String> = std::fs::read_dir(r.join("patches"))
-        .map_err(|e| e.to_string())?
+/// The numbered patches in `dir`, in the order they apply.
+fn numbered_patches(dir: &Path) -> Result<Vec<String>, String> {
+    let mut patches: Vec<String> = std::fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n.ends_with(".patch") && n.starts_with(|c: char| c.is_ascii_digit()))
         .collect();
     patches.sort();
-    for p in patches {
+    Ok(patches)
+}
+
+/// A patch set's directory under patches/: one plain name, not a path.
+fn patch_set_dir(set: &str) -> Result<PathBuf, String> {
+    if set.is_empty()
+        || !set
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!(
+            "patch set {set:?}: expected a directory name under patches/"
+        ));
+    }
+    let dir = root().join("patches").join(set);
+    if dir.is_dir() {
+        Ok(dir)
+    } else {
+        Err(format!("no patch set patches/{set}/"))
+    }
+}
+
+/// Whether the rind working tree already holds `rel` (relative to rind/).
+fn patch_applied(rel: &str) -> bool {
+    Command::new("git")
+        .args(["-C", "rind", "apply", "--reverse", "--check", rel])
+        .current_dir(root())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+fn apply_patches(set: Option<&str>, reverse: bool) -> Result<(), String> {
+    let r = root();
+    sh(&r, None, "git submodule update --init rind", &[])?;
+    let set_patches = match set {
+        Some(set) => {
+            let dir = patch_set_dir(set)?;
+            numbered_patches(&dir)?
+                .into_iter()
+                .map(|p| format!("{set}/{p}"))
+                .collect()
+        }
+        None => vec![],
+    };
+    if reverse {
+        for p in set_patches.iter().rev() {
+            let rel = format!("../patches/{p}");
+            if patch_applied(&rel) {
+                git(&r.join("rind"), &["apply", "--reverse", &rel])?;
+                println!("reversed: patches/{p}");
+            } else {
+                println!("not applied: patches/{p}");
+            }
+        }
+        return Ok(());
+    }
+    let base = numbered_patches(&r.join("patches"))?;
+    for p in base.iter().chain(&set_patches) {
         let rel = format!("../patches/{p}");
-        let applied = Command::new("git")
-            .args(["-C", "rind", "apply", "--reverse", "--check", &rel])
-            .current_dir(&r)
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
-        if applied {
+        if patch_applied(&rel) {
             println!("already applied: patches/{p}");
         } else {
             git(&r.join("rind"), &["apply", &rel])?;
@@ -510,7 +572,13 @@ fn local_time(p: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn provenance(board: Board, images: &Path, rind_bench: &str, note: &str) -> Result<(), String> {
+fn provenance(
+    board: Board,
+    images: &Path,
+    rind_bench: &str,
+    note: &str,
+    set: Option<&str>,
+) -> Result<(), String> {
     let dir = crate_dir(board);
     let images = if images.is_absolute() {
         images.to_path_buf()
@@ -530,6 +598,14 @@ fn provenance(board: Board, images: &Path, rind_bench: &str, note: &str) -> Resu
         .filter(|n| board == Board::Nrf || !n.contains("thumbv7em"))
         .collect();
     patches.sort();
+    if let Some(set) = set {
+        let dir = patch_set_dir(set)?;
+        patches.extend(
+            numbered_patches(&dir)?
+                .into_iter()
+                .map(|p| format!("{set}/{p}")),
+        );
+    }
     let mut names: Vec<String> = std::fs::read_dir(&images)
         .map_err(|e| format!("{}: {e}", images.display()))?
         .flatten()
@@ -668,10 +744,12 @@ fn repro_overalign() -> Result<(), String> {
 fn main() -> ExitCode {
     let r = match Cli::parse().cmd {
         Cmd::Check { clean } => check(clean),
-        Cmd::ApplyPatches => apply_patches(),
+        Cmd::ApplyPatches { set, reverse } => apply_patches(set.as_deref(), reverse),
         Cmd::VendorRing => vendor_ring(),
         Cmd::BuildImages { board, benches, out, pad } => build_images(board, &benches, &out, pad),
-        Cmd::Provenance { board, images, rind_bench, note } => provenance(board, &images, &rind_bench, &note),
+        Cmd::Provenance { board, images, rind_bench, note, set } => {
+            provenance(board, &images, &rind_bench, &note, set.as_deref())
+        }
         Cmd::Uf2 { files, base, family, info, region } => match (info, region, files.as_slice()) {
             (true, None, [f]) => uf2::info(f).map(|s| println!("{s}")),
             (false, Some(r), [f]) => uf2::region(f, r[0], r[1]).map(|s| println!("{s}")),

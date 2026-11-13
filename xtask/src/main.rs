@@ -4,17 +4,19 @@
 //! The firmware crates build with target toolchains (espup's `esp` for the
 //! ESP32-S3, a pinned stable with thumbv7em for the nRF52840 and thumbv6m
 //! for the RP2040) whose environment `esp32/env.sh`, `nrf52840/env.sh` and
-//! `rp2040/env.sh` set up; those stay shell, sourced by these commands
-//! before each cargo call, since that environment is the toolchains' own
-//! export scripts.
+//! `rp2040/env.sh` set up. Those stay shell, sourced before each cargo call,
+//! since that environment is the toolchains' own export scripts. Their
+//! exports are applied with `Command::env`; the commands are argument lists.
 
 mod pbm;
 mod uf2;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 /// Every bench file this port runs, in the order they build and run.
 const BENCHES: &[&str] = &[
@@ -126,22 +128,163 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
-/// Runs `sh -c script` in `dir` (after sourcing `env`, if given), echoing it.
-fn sh(dir: &Path, env: Option<&str>, script: &str, vars: &[(&str, String)]) -> Result<(), String> {
-    let full = match env {
-        Some(e) => format!(". ./{e} && {script}"),
-        None => script.to_string(),
-    };
-    let mut c = Command::new("sh");
-    c.arg("-c").arg(&full).current_dir(dir);
-    for (k, v) in vars {
-        c.env(k, v);
+/// Source `$1` and write the environment it produces to `$2`. The file name
+/// is an argument; nothing is interpolated into this script.
+const SOURCE_ENV_SCRIPT: &str = ". \"$1\" && exec /usr/bin/env -0 > \"$2\"";
+
+struct RemoveFile(PathBuf);
+
+impl Drop for RemoveFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
-    let st = c.status().map_err(|e| format!("sh: {e}"))?;
+}
+
+fn parse_env0(bytes: &[u8]) -> Vec<(OsString, OsString)> {
+    let mut vars = Vec::new();
+    for entry in bytes.split(|b| *b == 0) {
+        if entry.is_empty() {
+            continue;
+        }
+        let Some(eq) = entry.iter().position(|b| *b == b'=') else {
+            continue;
+        };
+        let key = &entry[..eq];
+        if key.is_empty() {
+            continue;
+        }
+        let val = &entry[eq + 1..];
+        vars.push((
+            OsString::from_vec(key.to_vec()),
+            OsString::from_vec(val.to_vec()),
+        ));
+    }
+    vars
+}
+
+/// Environment after sourcing `env_file` in `dir`.
+///
+/// `vars` are in the shell's environment before the file is sourced, so an
+/// export of the same name in the script overrides them. The result is the
+/// full environment a command run from that shell would inherit.
+fn sourced_env(
+    dir: &Path,
+    env_file: &str,
+    vars: &[(&str, String)],
+) -> Result<Vec<(OsString, OsString)>, String> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out_path =
+        std::env::temp_dir().join(format!("rind-hardware-env-{}-{n}", std::process::id()));
+    let _remove = RemoveFile(out_path.clone());
+    let source = if env_file.contains('/') {
+        env_file.to_string()
+    } else {
+        format!("./{env_file}")
+    };
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(SOURCE_ENV_SCRIPT)
+        .arg("sh")
+        .arg(&source)
+        .arg(&out_path)
+        .current_dir(dir);
+    for (k, v) in vars {
+        cmd.env(k, v);
+    }
+    let st = cmd.status().map_err(|e| format!("sh: {e}"))?;
+    if !st.success() {
+        return Err(format!(
+            "failed ({st}): source {env_file} in {}",
+            dir.display()
+        ));
+    }
+    let bytes = std::fs::read(&out_path).map_err(|e| format!("env: {e}"))?;
+    let parsed = parse_env0(&bytes);
+    if parsed.is_empty() {
+        return Err(format!(
+            "source {env_file} in {} produced no environment",
+            dir.display()
+        ));
+    }
+    Ok(parsed)
+}
+
+fn command_line(program: &str, args: &[impl AsRef<std::ffi::OsStr>]) -> String {
+    let mut parts = Vec::with_capacity(1 + args.len());
+    parts.push(program.to_string());
+    for arg in args {
+        parts.push(arg.as_ref().to_string_lossy().into_owned());
+    }
+    parts.join(" ")
+}
+
+/// `program` and `args`, in `dir`, ready to spawn.
+///
+/// When `env_file` is set, that toolchain script is sourced and the resulting
+/// environment is applied with [`Command::env`] after clearing the inherited
+/// one, so the child sees the shell's environment. Otherwise the process
+/// environment is kept and `vars` are applied with [`Command::env`].
+fn prepare<S: AsRef<std::ffi::OsStr>>(
+    dir: &Path,
+    env_file: Option<&str>,
+    program: &str,
+    args: &[S],
+    vars: &[(&str, String)],
+) -> Result<Command, String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args).current_dir(dir);
+    if let Some(env_file) = env_file {
+        cmd.env_clear();
+        for (k, v) in sourced_env(dir, env_file, vars)? {
+            cmd.env(k, v);
+        }
+    } else {
+        for (k, v) in vars {
+            cmd.env(k, v);
+        }
+    }
+    Ok(cmd)
+}
+
+/// Runs `program` with `args` in `dir`. See [`prepare`].
+fn run<S: AsRef<std::ffi::OsStr>>(
+    dir: &Path,
+    env_file: Option<&str>,
+    program: &str,
+    args: &[S],
+    vars: &[(&str, String)],
+) -> Result<(), String> {
+    let line = command_line(program, args);
+    let mut cmd = prepare(dir, env_file, program, args, vars)?;
+    let st = cmd.status().map_err(|e| format!("{program}: {e}"))?;
     if st.success() {
         Ok(())
     } else {
-        Err(format!("failed ({st}): {script} in {}", dir.display()))
+        Err(format!("failed ({st}): {line} in {}", dir.display()))
+    }
+}
+
+/// `patch -s -d strip_dir -p1`, with `patch` opened and passed on stdin.
+fn patch_file(dir: &Path, strip_dir: &str, patch: &Path) -> Result<(), String> {
+    let input = std::fs::File::open(patch).map_err(|e| format!("{}: {e}", patch.display()))?;
+    let st = Command::new("patch")
+        .arg("-s")
+        .arg("-d")
+        .arg(strip_dir)
+        .arg("-p1")
+        .stdin(Stdio::from(input))
+        .current_dir(dir)
+        .status()
+        .map_err(|e| format!("patch: {e}"))?;
+    if st.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed ({st}): patch -p1 {} in {}",
+            patch.display(),
+            dir.display()
+        ))
     }
 }
 
@@ -208,15 +351,16 @@ fn check(clean: bool) -> Result<(), String> {
         ]
         .map(String::from),
     );
-    sh(
-        &r,
-        None,
-        &format!(
-            "rustfmt +stable --edition 2024 --config-path .rustfmt.toml --check {}",
-            files.join(" ")
-        ),
-        &[],
-    )?;
+    let mut fmt_args = vec![
+        "+stable".to_string(),
+        "--edition".into(),
+        "2024".into(),
+        "--config-path".into(),
+        ".rustfmt.toml".into(),
+        "--check".into(),
+    ];
+    fmt_args.extend(files);
+    run(&r, None, "rustfmt", &fmt_args, &[])?;
     println!("rustfmt: ok");
     let tdir = |d: &str| -> Vec<(&'static str, String)> {
         if clean {
@@ -227,76 +371,143 @@ fn check(clean: bool) -> Result<(), String> {
             vec![]
         }
     };
-    sh(
+    run(
         &r.join("xtask"),
         None,
-        "cargo +stable clippy -q --all-targets -- -D warnings",
+        "cargo",
+        &[
+            "+stable",
+            "clippy",
+            "-q",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
         &tdir("xtask"),
     )?;
     println!("== clippy xtask: ok");
-    sh(
+    run(
         &r.join("demo/oled-ui"),
         None,
-        "cargo +stable clippy --all-targets -- -D warnings",
+        "cargo",
+        &["+stable", "clippy", "--all-targets", "--", "-D", "warnings"],
         &tdir("demo/oled-ui"),
     )?;
     let esp = r.join("esp32");
     let v = tdir("esp32");
     for b in BENCHES {
         println!("== clippy {b}");
-        sh(
+        run(
             &esp,
             Some("env.sh"),
-            &format!("cargo clippy --release --features {b} -- -D warnings"),
+            "cargo",
+            &[
+                "clippy",
+                "--release",
+                "--features",
+                b,
+                "--",
+                "-D",
+                "warnings",
+            ],
             &v,
         )?;
     }
     // The RNG diagnostics (src/rng.rs) take getrandom's custom backend, set
     // through a merged --config so .cargo/config.toml's rustflags stay.
-    let rng =
-        r#"'target.xtensa-esp32s3-espidf.rustflags=["--cfg","getrandom_backend=\"custom\""]'"#;
+    // Escaped quotes stay in the value; cargo's TOML parser reads them.
+    let rng = r#"target.xtensa-esp32s3-espidf.rustflags=["--cfg","getrandom_backend=\"custom\""]"#;
     for f in ["rng-diag", "rng-diag seeded-rng"] {
         println!("== clippy {f}");
-        sh(
+        run(
             &esp,
             Some("env.sh"),
-            &format!("cargo clippy --release --features '{f}' --config {rng} -- -D warnings"),
+            "cargo",
+            &[
+                "clippy",
+                "--release",
+                "--features",
+                f,
+                "--config",
+                rng,
+                "--",
+                "-D",
+                "warnings",
+            ],
             &v,
         )?;
     }
     println!("== clippy aes_gcm oled + examples");
-    sh(
+    run(
         &esp,
         Some("env.sh"),
-        "cargo clippy --release --features 'aes_gcm oled' --examples -- -D warnings",
+        "cargo",
+        &[
+            "clippy",
+            "--release",
+            "--features",
+            "aes_gcm oled",
+            "--examples",
+            "--",
+            "-D",
+            "warnings",
+        ],
         &v,
     )?;
     let nrf = r.join("nrf52840");
     let v = tdir("nrf52840");
     for b in BENCHES {
         println!("== clippy nrf52840 {b}");
-        sh(
+        run(
             &nrf,
             Some("env.sh"),
-            &format!("cargo clippy --release --features {b} -- -D warnings"),
+            "cargo",
+            &[
+                "clippy",
+                "--release",
+                "--features",
+                b,
+                "--",
+                "-D",
+                "warnings",
+            ],
             &v,
         )?;
     }
     println!("== clippy nrf52840 wdt-probe");
-    sh(
+    run(
         &nrf,
         Some("env.sh"),
-        "cargo clippy --release --features wdt-probe -- -D warnings",
+        "cargo",
+        &[
+            "clippy",
+            "--release",
+            "--features",
+            "wdt-probe",
+            "--",
+            "-D",
+            "warnings",
+        ],
         &v,
     )?;
     let rp = r.join("rp2040");
     let v = tdir("rp2040");
     for b in BENCHES {
         println!("== clippy rp2040 {b}");
-        sh(
+        run(
             &rp,
             Some("env.sh"),
-            &format!("cargo clippy --release --features {b} -- -D warnings"),
+            "cargo",
+            &[
+                "clippy",
+                "--release",
+                "--features",
+                b,
+                "--",
+                "-D",
+                "warnings",
+            ],
             &v,
         )?;
     }
@@ -306,7 +517,13 @@ fn check(clean: bool) -> Result<(), String> {
 
 fn apply_patches() -> Result<(), String> {
     let r = root();
-    sh(&r, None, "git submodule update --init rind", &[])?;
+    run(
+        &r,
+        None,
+        "git",
+        &["submodule", "update", "--init", "rind"],
+        &[],
+    )?;
     let mut patches: Vec<String> = std::fs::read_dir(r.join("patches"))
         .map_err(|e| e.to_string())?
         .flatten()
@@ -348,10 +565,11 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 
 fn vendor_ring() -> Result<(), String> {
     let r = root();
-    sh(
+    run(
         &r.join("nrf52840"),
         Some("env.sh"),
-        "cargo fetch -q --target thumbv7em-none-eabihf",
+        "cargo",
+        &["fetch", "-q", "--target", "thumbv7em-none-eabihf"],
         &[],
     )?;
     let home = std::env::var("CARGO_HOME").unwrap_or(format!(
@@ -375,12 +593,7 @@ fn vendor_ring() -> Result<(), String> {
         let to = r.join(".tools").join(dir);
         let _ = std::fs::remove_dir_all(&to);
         copy_dir(src, &to).map_err(|e| e.to_string())?;
-        sh(
-            &r,
-            None,
-            &format!("patch -s -d .tools/{dir} -p1 < patches/{patch}"),
-            &[],
-        )?;
+        patch_file(&r, &format!(".tools/{dir}"), &r.join("patches").join(patch))?;
         println!("ring 0.17.14, patched with {patch}, in .tools/{dir}");
     }
     Ok(())
@@ -407,10 +620,11 @@ fn build_images(
     let vars = vec![("RIND_BENCH_PAD", pad.unwrap_or(0).to_string())];
     for b in &list {
         println!("== {b}");
-        sh(
+        run(
             &dir,
             Some("env.sh"),
-            &format!("cargo build --release --features {b}"),
+            "cargo",
+            &["build", "--release", "--features", b.as_str()],
             &vars,
         )?;
         match board {
@@ -423,14 +637,28 @@ fn build_images(
                 std::fs::copy(&elf, out.join(format!("{b}.elf"))).map_err(|e| e.to_string())?;
                 // Only the loadable sections go into the UF2.
                 let bin = out.join(format!("{b}.bin"));
-                sh(
+                let mut objcopy_args: Vec<OsString> = [
+                    "-O",
+                    "binary",
+                    "-j",
+                    ".vector_table",
+                    "-j",
+                    ".text",
+                    "-j",
+                    ".rodata",
+                    "-j",
+                    ".data",
+                ]
+                .into_iter()
+                .map(OsString::from)
+                .collect();
+                objcopy_args.push(elf.as_os_str().to_os_string());
+                objcopy_args.push(bin.as_os_str().to_os_string());
+                run(
                     &dir,
                     Some("env.sh"),
-                    &format!(
-                        "arm-none-eabi-objcopy -O binary -j .vector_table -j .text -j .rodata -j .data '{}' '{}'",
-                        elf.display(),
-                        bin.display()
-                    ),
+                    "arm-none-eabi-objcopy",
+                    &objcopy_args,
                     &[],
                 )?;
                 println!(
@@ -448,14 +676,17 @@ fn build_images(
                 std::fs::copy(&elf, out.join(format!("{b}.elf"))).map_err(|e| e.to_string())?;
                 // All loadable sections, so .boot2 at 0x10000000 is first.
                 let bin = out.join(format!("{b}.bin"));
-                sh(
+                let objcopy_args = [
+                    OsString::from("-O"),
+                    OsString::from("binary"),
+                    elf.as_os_str().to_os_string(),
+                    bin.as_os_str().to_os_string(),
+                ];
+                run(
                     &dir,
                     Some("env.sh"),
-                    &format!(
-                        "arm-none-eabi-objcopy -O binary '{}' '{}'",
-                        elf.display(),
-                        bin.display()
-                    ),
+                    "arm-none-eabi-objcopy",
+                    &objcopy_args,
                     &[],
                 )?;
                 println!(
@@ -568,14 +799,23 @@ fn oled_media(tsv: &Path, out: &Path) -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("oled-media-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    sh(
+    let mut tmp_arg = tmp.as_os_str().to_os_string();
+    tmp_arg.push("/");
+    let render_args = [
+        OsString::from("+stable"),
+        OsString::from("run"),
+        OsString::from("-q"),
+        OsString::from("--example"),
+        OsString::from("render"),
+        OsString::from("--"),
+        tsv.as_os_str().to_os_string(),
+        tmp_arg,
+    ];
+    run(
         &root().join("demo/oled-ui"),
         None,
-        &format!(
-            "cargo +stable run -q --example render -- '{}' '{}/'",
-            tsv.display(),
-            tmp.display()
-        ),
+        "cargo",
+        &render_args,
         &[],
     )?;
     let mut pbms: Vec<PathBuf> = std::fs::read_dir(&tmp)
@@ -698,5 +938,141 @@ fn main() -> ExitCode {
             eprintln!("{e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static N: AtomicU64 = AtomicU64::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("rind-hardware-xtask-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn arguments_are_not_passed_through_a_shell() {
+        let weird = "$(echo injected) `echo x` ; rm -rf / # ' \" \\";
+        let dir = std::env::temp_dir();
+        let out = prepare(&dir, None, "printf", &["%s", weird], &[])
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.stdout, weird.as_bytes());
+    }
+
+    #[test]
+    fn command_env_sets_variables_without_replacing_the_process_environment() {
+        let home = std::env::var("HOME").expect("HOME");
+        let dir = std::env::temp_dir();
+        let out = prepare(
+            &dir,
+            None,
+            "sh",
+            &["-c", "printf %s%s \"$HOME\" \"$RIND_FROM_VAR\""],
+            &[("RIND_FROM_VAR", "from-var".into())],
+        )
+        .unwrap()
+        .output()
+        .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.stdout, format!("{home}from-var").as_bytes());
+    }
+
+    #[test]
+    fn toolchain_env_file_is_sourced_and_its_name_is_not_shell_code() {
+        let scratch = Scratch::new();
+        let bin = scratch.0.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join("rind-fake-tool");
+        std::fs::write(
+            &tool,
+            "#!/bin/sh\nprintf %s \"${RIND_FROM_FILE}-${RIND_FROM_VAR}\"\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&tool).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        std::fs::set_permissions(&tool, perms).unwrap();
+        std::fs::write(
+            scratch.0.join("env name.sh"),
+            format!(
+                "export RIND_FROM_FILE='from file'\nexport PATH=\"{}:$PATH\"\n",
+                bin.display()
+            ),
+        )
+        .unwrap();
+
+        let out = prepare(
+            &scratch.0,
+            Some("env name.sh"),
+            "rind-fake-tool",
+            &[] as &[&str],
+            &[
+                ("RIND_FROM_VAR", "from-var".into()),
+                ("RIND_FROM_FILE", "nope".into()),
+            ],
+        )
+        .unwrap()
+        .output()
+        .unwrap();
+        assert!(
+            out.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.stdout, b"from file-from-var");
+
+        let marker = scratch.0.join("injected");
+        let evil = format!("env.sh; touch {}", marker.display());
+        std::fs::write(scratch.0.join("env.sh"), "export OK=1\n").unwrap();
+        let failed = prepare(&scratch.0, Some(&evil), "printf", &["%s", "ran"], &[]);
+        assert!(failed.is_err());
+        assert!(
+            !marker.exists(),
+            "env file name was executed as a shell script"
+        );
+    }
+
+    #[test]
+    fn patch_file_reads_the_path_instead_of_a_shell_redirect() {
+        let scratch = Scratch::new();
+        std::fs::write(scratch.0.join("f.txt"), "a\n").unwrap();
+        let patch = scratch.0.join("name; echo INJECTED.patch");
+        std::fs::write(
+            &patch,
+            "--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+        )
+        .unwrap();
+        patch_file(&scratch.0, ".", &patch).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("f.txt")).unwrap(),
+            "b\n"
+        );
+        assert!(!scratch.0.join("INJECTED").exists());
     }
 }

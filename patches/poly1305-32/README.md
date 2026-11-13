@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0 -->
 # poly1305-32: a 32-bit-limb Poly1305 for rind's portable backend
 
-An optional patch set, not in the published images. `0006-...patch` is written as an upstream
+An optional patch set, not in the published images. `0001-...patch` is written as an upstream
 rind PR (`feat(portable): Poly1305 in 26-bit limbs on 32-bit targets`); it applies on top of
 patches 0001-0005 at rind `98568332`. (It was written as 0005, before `0005-feat-reuse-cache-...`
-landed, and renumbered; the content is unchanged.)
+landed, then numbered 0006 in the base series. It is `0001` inside this directory so an
+optional set does not take the next base number. The patch content is unchanged. See
+[../README.md](../README.md).)
 
 ## Why
 

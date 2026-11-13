@@ -1,0 +1,73 @@
+From 9f0e1e75cb09aa29955ff3c2f3247744c312fca0 Mon Sep 17 00:00:00 2001
+From: steelhead99x <steelhead99x@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 10:56:50 -0800
+Subject: [PATCH 3/4] fix: build the debug profile for bare-metal targets
+ without std
+
+`Entry`'s debug-build count of live entries is a `std::thread_local!`, so a
+debug (or clippy) build for `thumbv6m-none-eabi`, which builds without std,
+failed to compile; release builds were unaffected. Bare metal
+(`target_os = "none"`) now leaves that check out, as there is no
+thread-local without std. Hosted builds keep it.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+---
+ rind/src/low/entry.rs | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/rind/src/low/entry.rs b/rind/src/low/entry.rs
+index f03d27b6..f87a6d55 100644
+--- a/rind/src/low/entry.rs
++++ b/rind/src/low/entry.rs
+@@ -4,10 +4,12 @@
+ use super::cpu::verify_cpu_features;
+ use super::{enter_cpu_state, leave_cpu_state};
+ 
+-#[cfg(all(debug_assertions, not(test)))]
++#[cfg(all(debug_assertions, not(test), not(target_os = "none")))]
+ std::thread_local! {
+     // This thread's live `Entry`s, for `Entry::assert_held`. Unit tests call
+     // internals with no public function above them, so they don't count.
++    // Bare metal (`target_os = "none"`) builds without std, so it has no
++    // thread-local and leaves the check out.
+     static HELD: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+ }
+ 
+@@ -27,7 +29,7 @@ impl Entry {
+     #[must_use]
+     pub(crate) fn new_public() -> Self {
+         verify_cpu_features();
+-        #[cfg(all(debug_assertions, not(test)))]
++        #[cfg(all(debug_assertions, not(test), not(target_os = "none")))]
+         HELD.set(HELD.get() + 1);
+ 
+         Self {
+@@ -44,7 +46,7 @@ impl Entry {
+     pub(crate) fn new_secret() -> Self {
+         verify_cpu_features();
+         let cpu_state = enter_cpu_state();
+-        #[cfg(all(debug_assertions, not(test)))]
++        #[cfg(all(debug_assertions, not(test), not(target_os = "none")))]
+         HELD.set(HELD.get() + 1);
+ 
+         Self {
+@@ -58,14 +60,14 @@ impl Entry {
+     /// Primitives that make no `Entry` of their own call this, so a test
+     /// reaching one through a public function that skipped its `Entry` fails.
+     pub(crate) fn assert_held() {
+-        #[cfg(all(debug_assertions, not(test)))]
++        #[cfg(all(debug_assertions, not(test), not(target_os = "none")))]
+         assert!(HELD.get() > 0, "computing outside an `Entry`");
+     }
+ }
+ 
+ impl Drop for Entry {
+     fn drop(&mut self) {
+-        #[cfg(all(debug_assertions, not(test)))]
++        #[cfg(all(debug_assertions, not(test), not(target_os = "none")))]
+         HELD.set(HELD.get() - 1);
+         if self.secret {
+             leave_cpu_state(self.cpu_state);
+-- 
+2.39.3 (Apple Git-146)
+

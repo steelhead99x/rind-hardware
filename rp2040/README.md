@@ -38,8 +38,8 @@ board, as [Hardware](#hardware) lists.
   every 34.4 s, the same width as DWT on the nRF52840. **Resolution is 1 CPU
   cycle.**
 - The RP2040's **1 MHz TIMER** (64-bit, 1 µs) is an independent check of that
-  count at boot, reported in the start record as `check_cycles` and
-  `check_us`. It is not the timed clock: 1 µs is too coarse for the short
+  count at boot, over about 300 ms (at least two SysTick wraps), reported in
+  the start record as `check_cycles` and `check_us`. It is not the timed clock: 1 µs is too coarse for the short
   rows.
 - The 16 KB XIP cache is left on, as boot2 enables it. There is no data
   cache. Core 1 is left parked, so the `critical-section` impl (a hardware

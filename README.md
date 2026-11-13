@@ -30,6 +30,7 @@ repo holds only the firmware and the upstream-ready port.
 | `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (idempotent; `--set` adds an optional patch set, `--reverse` takes it out), `vendor-ring`, `build-images`, `provenance`, `check`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
 | `criterion-esp/` | A criterion API shim, renamed to `criterion`: the bench files' `criterion::*` calls time with the core's cycle counter and print JSON | maybe, as a dev tool |
 | `esp32/` | The ESP-IDF firmware: compiles the bench files with `#[path]`, runs known-answer checks, the hardware AES/SHA baseline | maybe, under `rind-bench/esp32` |
+| `host-kat/` | The boards' known-answer checks (`esp32/src/vectors.rs`, by path, unchanged) on a Linux host, plus aws-lc-rs, graviola and OpenSSL against the same vectors and rind's outputs; run before timing a host (the Jetson Orin Nano in rind-results) | no |
 | `demo/` | The OLED demo screens (`oled-ui`) and their firmware glue, behind the `oled` feature | no |
 
 The bench files are not copied: `esp32/src/main.rs` includes

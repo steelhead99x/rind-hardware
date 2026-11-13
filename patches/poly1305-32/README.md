@@ -83,7 +83,13 @@ Built 2026-11-12 16:27-16:52 PST from rind `98568332` with patches 0001-0004, us
 and toolchain for both. Base patch 0005 landed afterwards. It changes only code under
 `cfg(not(target_has_atomic = "ptr"))`, and both chips have pointer-width atomics, so rind's code in
 these images matches a 0001-0005 build. `-base` leaves out `poly1305-32` and is the A/B baseline from the
-same build. Each folder has `SHA256SUMS` and `images.json` (provenance).
+same build.
+
+The images themselves are gitignored build artifacts and are not in this repository. Their sha256
+values are recorded in the table below and in [SHA256SUMS](SHA256SUMS) (paths relative to the
+repository root). After a local rebuild, or with a copy of the images, verify from the root with
+`sha256sum -c patches/poly1305-32/SHA256SUMS`. Each image folder also has `images.json` (provenance)
+when built with `cargo xtask provenance`.
 
 | Image | sha256 |
 |---|---|
@@ -113,15 +119,15 @@ published set.
 
 ## Hardware run
 
-ESP32-S3, from `~/rind-results` (about 10 minutes). Set `ESPFLASH_PORT` if more than one board is plugged in:
+From a rind-results checkout, with `FIRMWARE` pointing at this repository (about 10 minutes
+for the ESP32-S3). Set `ESPFLASH_PORT` if more than one board is plugged in:
 
 ```sh
-cd ~/rind-hardware/esp32/images-poly1305-32 && sha256sum -c SHA256SUMS && cd -
-cd ~/rind-hardware/esp32/images-poly1305-32-base && sha256sum -c SHA256SUMS && cd -
-cd ~/rind-results
+FIRMWARE=../rind-hardware
+sha256sum -c $FIRMWARE/patches/poly1305-32/SHA256SUMS
 D=results/esp32s3/diag/poly1305-32
-OUT=$D/raw-base cargo xtask run-all ~/rind-hardware/esp32/images-poly1305-32-base chacha20poly1305 xchacha20poly1305
-OUT=$D/raw      cargo xtask run-all ~/rind-hardware/esp32/images-poly1305-32      chacha20poly1305 xchacha20poly1305
+OUT=$D/raw-base cargo xtask run-all $FIRMWARE/esp32/images-poly1305-32-base chacha20poly1305 xchacha20poly1305
+OUT=$D/raw      cargo xtask run-all $FIRMWARE/esp32/images-poly1305-32      chacha20poly1305 xchacha20poly1305
 cargo xtask compare $D/raw-base $D/raw chacha20poly1305 xchacha20poly1305 \
   --label-a hacl --label-b poly1305-32 --out $D/compare.md
 ```
@@ -130,16 +136,15 @@ cargo xtask compare $D/raw-base $D/raw chacha20poly1305 xchacha20poly1305 \
 both sides. The rows to read are rind's ChaCha20-Poly1305 and XChaCha20-Poly1305
 seal and open, against ring's rows from the same runs.
 
-nRF52840 (T1000-E): this needs a Meshtastic bridge window. Follow
-[nrf52840/README.md](../../nrf52840/README.md)'s backup and restore steps: stop
-`mesh-watcher.timer` and `meshtastic-bridge`, export the config, run, restore the Meshtastic UF2,
-and restart both. Between those steps:
+nRF52840 (T1000-E): this needs a window when nothing else holds the node's serial port. Follow
+[nrf52840/README.md](../../nrf52840/README.md)'s backup and restore steps: stop any host software
+holding the port, export the config, run, and restore the Meshtastic UF2. Between those steps:
 
 ```sh
-cd ~/rind-results
+FIRMWARE=../rind-hardware
 D=results/nrf52840/diag/poly1305-32
-OUT=$D/raw-base cargo xtask run-all-nrf ~/rind-hardware/nrf52840/images-poly1305-32-base chacha20poly1305 xchacha20poly1305
-OUT=$D/raw      cargo xtask run-all-nrf ~/rind-hardware/nrf52840/images-poly1305-32      chacha20poly1305 xchacha20poly1305
+OUT=$D/raw-base cargo xtask run-all-nrf $FIRMWARE/nrf52840/images-poly1305-32-base chacha20poly1305 xchacha20poly1305
+OUT=$D/raw      cargo xtask run-all-nrf $FIRMWARE/nrf52840/images-poly1305-32      chacha20poly1305 xchacha20poly1305
 cargo xtask compare $D/raw-base $D/raw chacha20poly1305 xchacha20poly1305 \
   --label-a hacl --label-b poly1305-32 --out $D/compare.md
 ```

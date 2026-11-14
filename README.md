@@ -130,6 +130,8 @@ cargo xtask provenance esp --rind-bench <commit> --note "esp build"
 cd esp32 && espflash flash --port <PORT> --flash-freq 80mhz images/aes_gcm.elf && espflash monitor   # RB: lines
 ```
 
+[esp32/pr69/README.md](esp32/pr69/README.md) builds the `sha2`, `hmac`, and `hkdf` images twice, at `steelhead99x/rind` main `8dfb7942` and at `ef58672f` (`perf/esp32s3-rolled-sha512`), for the board re-run in [rind#69](https://github.com/steelhead99x/rind/pull/69). The script does not flash.
+
 `apply-patches` commits the base patches with `git am` onto the local branch
 `hardware/applied` inside the submodule, starting from the pinned commit
 (initialising the submodule if `rind/` is missing). The commits are unsigned

@@ -1,0 +1,315 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steelhead99x <steelhead99x@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 17:31:51 -0800
+Subject: [PATCH 6/7] perf(portable): rolled SHA-512 on Arm without CAS
+ (ARMv6-M)
+
+HACL*'s fully unrolled SHA-512 compiles to about 27 KB of Thumb code
+for thumbv6m-none-eabi. That is larger than an RP2040's 16 KB XIP cache,
+so each block refetched most of the function from QSPI flash: on a
+Raspberry Pi Pico every library (rind, RustCrypto, libcrux) ran SHA-512
+at about 2,200 cycles per byte, against 101 for SHA-256.
+
+On Arm targets without CAS atomics (ARMv6-M, plus the tier-3 ARMv4T and
+ARMv5TE bare-metal targets; target_has_atomic = "ptr" is the only cfg
+stable Rust gives that tells them apart) the portable backend now takes
+generic::sha512, a rolled loop of rounds in the style of
+generic::sha256. Its compression function is 1,724 bytes there. Every
+index and branch depends only on the round number. Every other target
+keeps HACL*'s SHA-512.
+
+On the Pico (125 MHz, XIP cache on, interleaved rounds, median of
+per-round medians):
+
+  sha512/rind/16KB           36.06 M -> 3.42 M cycles (0.095x)
+  sha512/rind/32B            315.0 k -> 28.7 k cycles (0.091x)
+  hmac-sha384/rind/32B       1.195 M -> 114.6 k cycles (0.096x)
+  hkdf-sha384/expand/rind    625.3 k -> 57.8 k cycles (0.092x)
+  ed25519-sign/rind          7.87 M -> 7.28 M cycles (0.925x)
+
+A test checks it against the backend's own SHA-512 over 1 to 9 blocks.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+---
+ rind/src/low/generic/sha512.rs | 214 +++++++++++++++++++++++++++++++++
+ rind/src/low/mod.rs            |  11 ++
+ rind/src/low/portable/sha.rs   |  12 +-
+ 3 files changed, 235 insertions(+), 2 deletions(-)
+ create mode 100644 rind/src/low/generic/sha512.rs
+
+diff --git a/rind/src/low/generic/sha512.rs b/rind/src/low/generic/sha512.rs
+new file mode 100644
+index 00000000..cb146ad0
+--- /dev/null
++++ b/rind/src/low/generic/sha512.rs
+@@ -0,0 +1,214 @@
++// SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
++
++//! SHA-512's compression function as one rolled loop of rounds, for ARMv6-M.
++//!
++//! HACL*'s fully unrolled SHA-512 is about 27 KB of Thumb code there, larger
++//! than the RP2040's 16 KB execute-in-place cache, so every block refetched
++//! most of it from QSPI flash: about 2,200 cycles per byte. This loop body
++//! stays in the cache. Every index and branch depends only on the round
++//! number, never on the data.
++
++macro_rules! CH {
++    ($x:expr, $y:expr, $z:expr) => {
++        ($x & $y) ^ (!$x & $z)
++    };
++}
++
++macro_rules! MAJ {
++    ($x:expr, $y:expr, $z:expr) => {
++        ($x & $y) ^ ($x & $z) ^ ($y & $z)
++    };
++}
++
++macro_rules! BSIG0 {
++    ($x:expr) => {
++        $x.rotate_right(28) ^ $x.rotate_right(34) ^ $x.rotate_right(39)
++    };
++}
++
++macro_rules! BSIG1 {
++    ($x:expr) => {
++        $x.rotate_right(14) ^ $x.rotate_right(18) ^ $x.rotate_right(41)
++    };
++}
++
++macro_rules! SSIG0 {
++    ($x:expr) => {
++        $x.rotate_right(1) ^ $x.rotate_right(8) ^ ($x >> 7)
++    };
++}
++
++macro_rules! SSIG1 {
++    ($x:expr) => {
++        $x.rotate_right(19) ^ $x.rotate_right(61) ^ ($x >> 6)
++    };
++}
++
++// Not inlined, so callers share one copy of the loop in the cache.
++#[inline(never)]
++fn sha512_compress_block(state: &mut [u64; 8], block: &[u8; 128]) {
++    let mut s = *state;
++
++    // A 16-word window into the whole W array, indexed mod 16.
++    let mut w = [0u64; 16];
++    let (words, _) = block.as_chunks::<8>();
++    for (w, word) in w.iter_mut().zip(words) {
++        *w = u64::from_be_bytes(*word);
++    }
++
++    for t in 0..80 {
++        let w_t = if t < 16 {
++            w[t]
++        } else {
++            // W[t] = SSIG1(W[t - 2]) + W[t - 7] + SSIG0(W[t - 15]) + W[t - 16]
++            let w_t = SSIG1!(w[(t - 2) % 16])
++                .wrapping_add(w[(t - 7) % 16])
++                .wrapping_add(SSIG0!(w[(t - 15) % 16]))
++                .wrapping_add(w[t % 16]);
++            w[t % 16] = w_t;
++            w_t
++        };
++
++        let [a, b, c, d, e, f, g, h] = s;
++        let t1 = h
++            .wrapping_add(BSIG1!(e))
++            .wrapping_add(CH!(e, f, g))
++            .wrapping_add(K[t])
++            .wrapping_add(w_t);
++        let t2 = BSIG0!(a).wrapping_add(MAJ!(a, b, c));
++        s = [t1.wrapping_add(t2), a, b, c, d.wrapping_add(t1), e, f, g];
++    }
++
++    for (h, s) in state.iter_mut().zip(s) {
++        *h = h.wrapping_add(s);
++    }
++}
++
++/// Compresses whole 128-byte `blocks` into `state`.
++pub(crate) fn sha512_compress_blocks(state: &mut [u64; 8], blocks: &[u8]) {
++    assert!(blocks.len().is_multiple_of(128));
++
++    let (chunks, _) = blocks.as_chunks::<128>();
++    for block in chunks {
++        sha512_compress_block(state, block);
++    }
++}
++
++static K: [u64; 80] = [
++    0x428a2f98d728ae22,
++    0x7137449123ef65cd,
++    0xb5c0fbcfec4d3b2f,
++    0xe9b5dba58189dbbc,
++    0x3956c25bf348b538,
++    0x59f111f1b605d019,
++    0x923f82a4af194f9b,
++    0xab1c5ed5da6d8118,
++    0xd807aa98a3030242,
++    0x12835b0145706fbe,
++    0x243185be4ee4b28c,
++    0x550c7dc3d5ffb4e2,
++    0x72be5d74f27b896f,
++    0x80deb1fe3b1696b1,
++    0x9bdc06a725c71235,
++    0xc19bf174cf692694,
++    0xe49b69c19ef14ad2,
++    0xefbe4786384f25e3,
++    0x0fc19dc68b8cd5b5,
++    0x240ca1cc77ac9c65,
++    0x2de92c6f592b0275,
++    0x4a7484aa6ea6e483,
++    0x5cb0a9dcbd41fbd4,
++    0x76f988da831153b5,
++    0x983e5152ee66dfab,
++    0xa831c66d2db43210,
++    0xb00327c898fb213f,
++    0xbf597fc7beef0ee4,
++    0xc6e00bf33da88fc2,
++    0xd5a79147930aa725,
++    0x06ca6351e003826f,
++    0x142929670a0e6e70,
++    0x27b70a8546d22ffc,
++    0x2e1b21385c26c926,
++    0x4d2c6dfc5ac42aed,
++    0x53380d139d95b3df,
++    0x650a73548baf63de,
++    0x766a0abb3c77b2a8,
++    0x81c2c92e47edaee6,
++    0x92722c851482353b,
++    0xa2bfe8a14cf10364,
++    0xa81a664bbc423001,
++    0xc24b8b70d0f89791,
++    0xc76c51a30654be30,
++    0xd192e819d6ef5218,
++    0xd69906245565a910,
++    0xf40e35855771202a,
++    0x106aa07032bbd1b8,
++    0x19a4c116b8d2d0c8,
++    0x1e376c085141ab53,
++    0x2748774cdf8eeb99,
++    0x34b0bcb5e19b48a8,
++    0x391c0cb3c5c95a63,
++    0x4ed8aa4ae3418acb,
++    0x5b9cca4f7763e373,
++    0x682e6ff3d6b2b8a3,
++    0x748f82ee5defb2fc,
++    0x78a5636f43172f60,
++    0x84c87814a1f0ab72,
++    0x8cc702081a6439ec,
++    0x90befffa23631e28,
++    0xa4506cebde82bde9,
++    0xbef9a3f7b2c67915,
++    0xc67178f2e372532b,
++    0xca273eceea26619c,
++    0xd186b8c721c0c207,
++    0xeada7dd6cde0eb1e,
++    0xf57d4f7fee6ed178,
++    0x06f067aa72176fba,
++    0x0a637dc5a2c898a6,
++    0x113f9804bef90dae,
++    0x1b710b35131c471b,
++    0x28db77f523047d84,
++    0x32caab7b40c72493,
++    0x3c9ebe0a15c9bebc,
++    0x431d67c49c100d4c,
++    0x4cc5d4becb3e42b6,
++    0x597f299cfc657e2a,
++    0x5fcb6fab3ad6faec,
++    0x6c44198c4a475817,
++];
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// Agrees with the backend's own SHA-512 (assembly or HACL*), which the
++    /// vector tests check, over 1 to 9 blocks of varied input.
++    #[test]
++    fn agrees_with_backend() {
++        let mut input = [0u8; 128 * 9];
++        let mut x = 0x9e37_79b9_7f4a_7c15u64;
++        for b in input.iter_mut() {
++            x ^= x << 13;
++            x ^= x >> 7;
++            x ^= x << 17;
++            *b = x as u8;
++        }
++        for n in 1..=9 {
++            let blocks = &input[..128 * n];
++            let mut ours = [
++                0x6a09e667f3bcc908,
++                0xbb67ae8584caa73b,
++                0x3c6ef372fe94f82b,
++                0xa54ff53a5f1d36f1,
++                0x510e527fade682d1,
++                0x9b05688c2b3e6c1f,
++                0x1f83d9abfb41bd6b,
++                0x5be0cd19137e2179,
++            ];
++            let mut theirs = ours;
++            sha512_compress_blocks(&mut ours, blocks);
++            crate::low::sha512_compress_blocks(&mut theirs, blocks);
++            assert_eq!(ours, theirs, "{n} blocks");
++        }
++    }
++}
+diff --git a/rind/src/low/mod.rs b/rind/src/low/mod.rs
+index ada6e1e9..fb80eabb 100644
+--- a/rind/src/low/mod.rs
++++ b/rind/src/low/mod.rs
+@@ -114,6 +114,17 @@ mod generic {
+     pub(super) mod sha1;
+     #[cfg(all(test, any(rind_backend = "arm", rind_backend = "x86_64")))]
+     pub(super) mod sha256;
++    // The SHA-512 of Arm without CAS atomics (ARMv6-M, and the tier-3
++    // ARMv4T and ARMv5TE bare-metal targets), and in tests.
++    #[cfg(any(
++        test,
++        all(
++            rind_backend = "portable",
++            target_arch = "arm",
++            not(target_has_atomic = "ptr")
++        )
++    ))]
++    pub(super) mod sha512;
+     pub(super) mod zeroise;
+ }
+ 
+diff --git a/rind/src/low/portable/sha.rs b/rind/src/low/portable/sha.rs
+index 94e044e9..22984e4c 100644
+--- a/rind/src/low/portable/sha.rs
++++ b/rind/src/low/portable/sha.rs
+@@ -3,9 +3,16 @@
+ //! SHA-1 on rind's portable code in `generic`, as armv7 runs it without the
+ //! crypto extension, and the SHA-2 family on HACL*'s verified
+ //! `Hacl_Hash_SHA2`, as libcrux-sha2 ships it. HACL*'s SHA-256 took 0.67-0.93
+-//! of `generic`'s time at 16 KB on x86_64.
++//! of `generic`'s time at 16 KB on x86_64. ARMv6-M takes `generic`'s rolled
++//! SHA-512 instead: HACL*'s unrolled one overflows an RP2040's 16 KB XIP
++//! cache and ran about 10x slower there.
+ 
+-use libcrux_sha2::hacl::{sha256_update_nblocks, sha512_update_nblocks};
++use libcrux_sha2::hacl::sha256_update_nblocks;
++#[cfg(not(all(target_arch = "arm", not(target_has_atomic = "ptr"))))]
++use libcrux_sha2::hacl::sha512_update_nblocks;
++
++#[cfg(all(target_arch = "arm", not(target_has_atomic = "ptr")))]
++pub(crate) use crate::low::generic::sha512::sha512_compress_blocks;
+ 
+ pub(crate) use crate::low::generic::sha1::sha1_compress_blocks;
+ 
+@@ -42,6 +49,7 @@ pub(crate) fn sha256_finish(state: &[u32; 8], message: &[u8], length: [u8; 8]) -
+ }
+ 
+ /// Compresses whole 128-byte `blocks` into `state`.
++#[cfg(not(all(target_arch = "arm", not(target_has_atomic = "ptr"))))]
+ pub(crate) fn sha512_compress_blocks(state: &mut [u64; 8], blocks: &[u8]) {
+     assert!(blocks.len().is_multiple_of(128));
+     for piece in blocks.chunks(PIECE) {
+-- 
+2.39.3 (Apple Git-146)
+

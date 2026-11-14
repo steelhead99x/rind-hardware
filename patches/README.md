@@ -12,11 +12,10 @@ that series. An optional patch does not.
 are numbered from `0001`. Two sets may each have a `0001`. Apply one with
 `cargo xtask apply-patches --set <name>`; `--reverse` takes that set back
 out and leaves the base series. `poly1305-32` is the set on main. Its file
-was briefly `0006` in the base sequence. That number collides with
-`rp2040/armv6m-sha512-ghash`, which still carries top-level `0006` (rolled
-SHA-512) and `0007` (GHASH by multiplies) on that branch. Those two belong
-in `patches/armv6m-sha512-ghash/0001-...` and `0002-...` when the branch
-lands, not as further base patches.
+was briefly `0006` in the base sequence. `armv6m-sha512-ghash` is the
+ARMv6-M set (rolled SHA-512, GHASH by multiplies, SHA-256's short path, and
+two no-std build fixes); its first two patches were top-level `0006` and
+`0007` on that branch before sets existed.
 
 **Ring.** `ring-0.17.14-*.patch` is applied by `cargo xtask vendor-ring` to a
 copy of ring, not to the rind submodule. Those names are outside both

@@ -1,0 +1,31 @@
+From 828db6617e76b82c660993b8ae0859f2ea3531bc Mon Sep 17 00:00:00 2001
+From: steelhead99x <steelhead99x@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 11:40:37 -0800
+Subject: [PATCH] fix(oprf): build VOPRF without std
+
+VOPRF's batches are `Vec`s, which bare-metal targets (`target_os =
+"none"`, built without std) do not get from the prelude, so
+`thumbv6m-none-eabi` stopped compiling once the OPRF landed. Import it
+from `alloc` there, as ML-DSA does.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+---
+ rind/src/high/oprf/voprf.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/rind/src/high/oprf/voprf.rs b/rind/src/high/oprf/voprf.rs
+index 72f4e70c..5c2a822f 100644
+--- a/rind/src/high/oprf/voprf.rs
++++ b/rind/src/high/oprf/voprf.rs
+@@ -3,6 +3,8 @@
+ //! RFC 9497's VOPRF mode: the OPRF, with the server proving it evaluated
+ //! every blinded element in a batch with the key it published.
+ 
++#[cfg(target_os = "none")]
++use alloc::vec::Vec;
+ use core::fmt;
+ 
+ use super::{
+-- 
+2.39.3 (Apple Git-146)
+

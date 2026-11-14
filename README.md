@@ -115,7 +115,7 @@ What an upstream PR would contain, smallest first. None has been opened.
 
 ## Build and run
 
-The toolchain installer and the capture tools are in rind-results (`tools/setup-toolchain.sh`,
+The toolchain installer and the capture tools are in rind-results (`cargo xtask setup-toolchain`,
 `cargo xtask run-all`). By hand:
 
 ```sh

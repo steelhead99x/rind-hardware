@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
+# Host-only checks: rustfmt and a build of the xtask. Firmware clippy and
+# image builds need the ESP-IDF and embedded toolchains; those stay local
+# (`cargo xtask check` / `cargo xtask build-images`) and are not run here.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  xtask:
+    name: fmt and xtask build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: rustfmt
+        run: cargo fmt --all --manifest-path xtask/Cargo.toml -- --check
+      - name: build xtask
+        run: cargo build --manifest-path xtask/Cargo.toml --release

@@ -1,0 +1,128 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steelhead99x <steelhead99x@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 17:31:51 -0800
+Subject: [PATCH 7/7] perf(portable): GHASH by muls alone on Arm without CAS
+ (ARMv6-M)
+
+ghash_nohw's 32-bit configuration takes 144 32x32->64 multiplies per
+block. ARMv6-M has no umull, so each was a call to __aeabi_lmul, and
+rind's AES-GCM on a Raspberry Pi Pico ran at 2.1 to 2.3 times
+RustCrypto's time.
+
+On Arm targets without CAS atomics, gcm_mul32_nohw becomes
+gcm_mul32_rev, which takes the same carry-less product with 32-bit muls
+alone, as BearSSL's ghash_ctmul32 does: the low word from multiplies
+truncated to 32 bits (carries only move upwards), the high word as the
+reversed low word of the product of the bit-reversed operands. Cortex-M0+
+muls takes the same time for every operand, and the bit reversals are
+shifts and masks, so its timing still does not depend on the key or the
+data. Every other target is unchanged.
+
+On the Pico (125 MHz, interleaved rounds, median of per-round medians):
+
+  aes128-gcm/rind/16KB      16.55 M -> 7.93 M cycles (0.479x)
+  aes256-gcm/rind/16KB      18.19 M -> 9.57 M cycles (0.526x)
+  aes128-gcm/rind/32B       81.95 k -> 36.79 k cycles (0.449x)
+
+A test checks gcm_mul32_rev against the widening product on 10,000
+pseudo-random operand pairs and on edge values; the existing GHASH model
+and SSSE3 tests cover the rest of the path.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+---
+ rind/src/low/generic/ghash_nohw.rs | 65 +++++++++++++++++++++++++++++-
+ 1 file changed, 64 insertions(+), 1 deletion(-)
+
+diff --git a/rind/src/low/generic/ghash_nohw.rs b/rind/src/low/generic/ghash_nohw.rs
+index fb80f44a..40185cf1 100644
+--- a/rind/src/low/generic/ghash_nohw.rs
++++ b/rind/src/low/generic/ghash_nohw.rs
+@@ -126,7 +126,13 @@ fn gcm_mul64_wide(a: u64, b: u64) -> (u64, u64) {
+ }
+ 
+ /// The carry-less product of `a` and `b`, by 32-bit multiplies.
+-#[cfg(any(target_pointer_width = "32", test))]
++#[cfg(any(
++    all(
++        target_pointer_width = "32",
++        not(all(target_arch = "arm", not(target_has_atomic = "ptr")))
++    ),
++    test
++))]
+ fn gcm_mul32_nohw(a: u32, b: u32) -> u64 {
+     // One term every four bits means the largest term is 32/4 = 8, which
+     // does not overflow into the next term.
+@@ -152,6 +158,42 @@ fn gcm_mul32_nohw(a: u32, b: u32) -> u64 {
+         | (c3 & 0x8888_8888_8888_8888)
+ }
+ 
++/// ARMv6-M (Arm without CAS atomics, in cfg terms) has no `umull`, so each
++/// 32x32->64 multiply above is a call to `__aeabi_lmul`. This takes the same
++/// product with `muls` alone, as BearSSL's `ghash_ctmul32` does: the low word
++/// by multiplies truncated to 32 bits, which carries never cross downwards,
++/// and the high word as the low word of the product of the bit-reversed
++/// operands, reversed. Cortex-M0+ `muls` takes the same time for every
++/// operand.
++#[cfg(any(all(target_arch = "arm", not(target_has_atomic = "ptr")), test))]
++fn gcm_mul32_rev(a: u32, b: u32) -> u64 {
++    fn low(a: u32, b: u32) -> u32 {
++        let a0 = a & 0x1111_1111;
++        let a1 = a & 0x2222_2222;
++        let a2 = a & 0x4444_4444;
++        let a3 = a & 0x8888_8888;
++
++        let b0 = b & 0x1111_1111;
++        let b1 = b & 0x2222_2222;
++        let b2 = b & 0x4444_4444;
++        let b3 = b & 0x8888_8888;
++
++        let m = u32::wrapping_mul;
++        let c0 = m(a0, b0) ^ m(a1, b3) ^ m(a2, b2) ^ m(a3, b1);
++        let c1 = m(a0, b1) ^ m(a1, b0) ^ m(a2, b3) ^ m(a3, b2);
++        let c2 = m(a0, b2) ^ m(a1, b1) ^ m(a2, b0) ^ m(a3, b3);
++        let c3 = m(a0, b3) ^ m(a1, b2) ^ m(a2, b1) ^ m(a3, b0);
++
++        (c0 & 0x1111_1111) | (c1 & 0x2222_2222) | (c2 & 0x4444_4444) | (c3 & 0x8888_8888)
++    }
++    // The 63-bit product's bits 31 to 62, reversed.
++    let hi = low(a.reverse_bits(), b.reverse_bits()).reverse_bits() >> 1;
++    u64::from(low(a, b)) | u64::from(hi) << 32
++}
++
++#[cfg(all(target_arch = "arm", not(target_has_atomic = "ptr")))]
++use gcm_mul32_rev as gcm_mul32_nohw;
++
+ /// The carry-less product of `a` and `b`, as its low and high words, by
+ /// Karatsuba over 32-bit halves.
+ #[cfg(any(target_pointer_width = "32", test))]
+@@ -245,6 +287,27 @@ mod tests {
+         );
+     }
+ 
++    // ARMv6-M's 32-bit product agrees with the widening one.
++    #[test]
++    fn mul32_rev_matches() {
++        let mut x = 0x2545_f491_4f6c_dd1du64;
++        for _ in 0..10_000 {
++            x ^= x << 13;
++            x ^= x >> 7;
++            x ^= x << 17;
++            let (a, b) = (x as u32, (x >> 32) as u32);
++            assert_eq!(gcm_mul32_rev(a, b), gcm_mul32_nohw(a, b), "{a:x} {b:x}");
++        }
++        for (a, b) in [
++            (u32::MAX, u32::MAX),
++            (0, u32::MAX),
++            (1, 1),
++            (1 << 31, 1 << 31),
++        ] {
++            assert_eq!(gcm_mul32_rev(a, b), gcm_mul32_nohw(a, b), "{a:x} {b:x}");
++        }
++    }
++
+     // On x86_64, the SSSE3 table is the arm above this one, and the model
+     // is GHASH by the book, so all three must agree from any state, under
+     // keys and inputs of pseudo-random bytes and of all ones, whose products
+-- 
+2.39.3 (Apple Git-146)
+

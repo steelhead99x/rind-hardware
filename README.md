@@ -27,7 +27,7 @@ repo holds only the firmware and the upstream-ready port.
 | `patches/` | `git format-patch` series that `apply-patches` commits onto the submodule. Base patches `0001`–`0005` are required. Optional sets live in `patches/<name>/`, numbered from `0001` in that directory, and are applied with `--set <name>`. Ring vendor patches are unnumbered | **the upstream PR** |
 | `nrf52840/` | The nRF52840 (T1000-E) firmware, `thumbv7em-none-eabihf` | [nrf52840/README.md](nrf52840/README.md) |
 | `rp2040/` | The RP2040 (Pico) firmware, `thumbv6m-none-eabi`; builds; known-answer checks passed on a Pico | [rp2040/README.md](rp2040/README.md) |
-| `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (commits the series on the submodule branch `hardware/applied`; idempotent; `--set` / `--reverse`), `vendor-ring`, `build-images` and `provenance` (both refuse a dirty rind tree), `check`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
+| `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (commits the series on the submodule branch `hardware/applied`; idempotent; `--set` / `--reverse`), `vendor-ring`, `build-images` and `provenance` (both refuse a dirty rind tree), `check`, `lint-log`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
 | `criterion-esp/` | A criterion API shim, renamed to `criterion`: the bench files' `criterion::*` calls time with the core's cycle counter and print JSON | maybe, as a dev tool |
 | `esp32/` | The ESP-IDF firmware: compiles the bench files with `#[path]`, runs known-answer checks, the hardware AES/SHA baseline | maybe, under `rind-bench/esp32` |
 | `host-kat/` | The boards' known-answer checks (`esp32/src/vectors.rs`, by path, unchanged) on a Linux host, plus aws-lc-rs, graviola and OpenSSL against the same vectors and rind's outputs; run before timing a host (the Jetson Orin Nano in rind-results) | no |
@@ -77,6 +77,28 @@ cd host-kat && cargo run --release
 
 It needs the `rind` submodule initialised. A non-zero exit means a library
 failed a check; do not time that host until it is clean.
+
+## Checking a capture
+
+`cargo xtask lint-log` reads a serial log or the JSONL rind-results stores
+and checks it before a publish. Boot noise is ignored. `RB:` lines and bare
+JSON objects are both records. A bench run has to open on `start` and close
+on `done`. Nanoseconds have to match the cycle counts at the start record's
+`cpu_hz` (the printed cycles are rounded to a tenth, and the check allows
+that). On an ESP32-S3 the `clock` record has to agree with `cpu_hz` within
+2%. On an RP2040, `check_cycles` and `check_us` have to agree within a
+millisecond, so one dropped or doubled 24-bit SysTick wrap (134 ms at
+125 MHz) fails the run. A library that failed a known-answer check must not
+have a result for that operation; the prefixes are the ones
+`esp32/src/vectors.rs` gives `exclude`, including the extra ones (QUIC
+header protection with AES and ChaCha, HKDF with HMAC).
+
+```sh
+cargo xtask lint-log capture.log ../rind-results/results/raw/x25519/run-1.jsonl
+```
+
+`cargo xtask check` runs this tool's tests, and criterion-esp's, before the
+firmware clippy. Those cover the same statistics with a fake cycle counter.
 
 ## The upstream PR
 
@@ -240,9 +262,9 @@ This repo follows rind's `CONTRIBUTING.md`: conventional-commit subjects with AI
 `Co-Authored-By:` trailer; no binaries or build artifacts (`.gitignore`); rind's `.rustfmt.toml`
 (`style_edition = "2024"`); `cargo clippy -- --deny warnings` for every image and both helper
 crates; SPDX headers; and a gap decision, in rind-results' `gaps.toml`, for every operation another
-Rust library beats rind on by more than 10%. `cargo xtask check` runs the rustfmt and clippy
-checks (every bench image, the display build with the examples, the nRF52840 and RP2040 images, the display UI
-on the host and the xtask itself); `--clean` (or `CHECK_CLEAN=1`) starts from empty target directories.
+Rust library beats rind on by more than 10%. `cargo xtask check` runs rustfmt, clippy, and the
+host tests (xtask and criterion-esp), then clippy for every bench image, the display build with
+the examples, and the nRF52840 and RP2040 images; `--clean` (or `CHECK_CLEAN=1`) starts from empty target directories.
 
 ## Media
 

@@ -252,8 +252,8 @@ rendered at 128x64 and 4x are in rind-results'
 
 ## Security
 
-To report a vulnerability in this firmware, the patches, or the tooling, see [SECURITY.md](SECURITY.md).
-Issues in the rind library itself should go to [upstream rind](https://github.com/kixel-ai/rind).
+See [SECURITY.md](SECURITY.md) to report a vulnerability in the firmware, the patches, or the xtask.
+A vulnerability in rind itself goes to [rind](https://github.com/kixel-ai/rind).
 
 ## License
 

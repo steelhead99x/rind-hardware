@@ -1,0 +1,119 @@
+error: unexpected argument '--out' found
+
+  tip: a similar argument exists: '--note'
+
+Usage: xtask provenance --rind-bench <RIND_BENCH> --note <NOTE> <BOARD>
+
+For more information, try '--help'.
+{
+ "note": "comparable pin d6ca9a75, apply-patches at a8c8bf4b, A/B not for results/",
+ "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+ "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+ "patches": [
+  {"name": "0001-fix-portable-build-MD5-on-Xtensa-whose-inline-assemb.patch", "sha256": "15c8a88b7d4c067ea4726abaaaaea27e24c992605c5588a543ecdb165480153a"},
+  {"name": "0002-feat-bench-leave-aws-lc-rs-rows-out-on-Xtensa-and-ba.patch", "sha256": "d3cb2092d5c3b676024b3ab5fb9c0c2083a2062d922ab8d440532e095a62f819"},
+  {"name": "0003-feat-build-for-bare-metal-targets-without-std.patch", "sha256": "3a6367cec7b3afd66969fb6bf65889a3ec7e3ba79e29e64fbee7726a0e96bf74"},
+  {"name": "0004-feat-bench-leave-aws-lc-rs-rows-out-of-sha3-on-Xtensa.patch", "sha256": "e82273bb3c4fe8eeb43526a2dbd1c272fa7e9fa75ac8910fd73da867c458e8bc"},
+  {"name": "0005-feat-reuse-cache-without-CAS-on-targets-that-lack-it.patch", "sha256": "e40d8eee290297885aadbd45729cc12bf8de0021c43c12bf194454560c60c035"},
+  {"name": "ring-0.17.14-xtensa-poly1305-align.patch", "sha256": "f86f74e81d34f6767f25bbb7986cd4346932f258fe8137e3783405490af5d04f"}
+ ],
+ "file_ext": ".elf",
+ "images": {
+  "aes_gcm": {
+   "sha256": "8874eb80fef4ec503c56cf8984f049dc3bd044f32c03a59d9679dd1cb36125ab",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  },
+  "chacha20poly1305": {
+   "sha256": "59697eae444a0bcccd0f297063a64884afe8c7dac777a51007a58d99794d0676",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  },
+  "cipher": {
+   "sha256": "3cdca70c80ac7db88c54c92194e2ef8f22dcb749d411e1ab4fcb940fac860711",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  },
+  "ed25519": {
+   "sha256": "2b89589be03b86e128fd4d02c40d9c494beee7c52dcecae89a26a81b1e9f9946",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  },
+  "hkdf": {
+   "sha256": "b814ee5bdba4fd5b35826b608d40b07e741e2e0914bae64afcefa34c4f40cc35",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:07 PST"
+  },
+  "hmac": {
+   "sha256": "c82ae9f82730cfb1562d65e5376b819fb628d0e7db17160e73b7aae1614db937",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:07 PST"
+  },
+  "mlkem768": {
+   "sha256": "1a47eec924dcf0412e319df1e26e2bffff23d1b44761916c3ccba25bc41756e4",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:07 PST"
+  },
+  "p256": {
+   "sha256": "8bf18693d763f559001313842d22d66dd4845518681db37f2a1a65ccaf7f0c60",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  },
+  "sha2": {
+   "sha256": "cf69b85b333bb5b1ebe570799296c314ce7cd8e68aaf1d03a30bcfdba987a432",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  },
+  "sha3": {
+   "sha256": "4117e16436fdc813b7f135886fec5a3ef375602457bf37e3127ba8bdb53898a4",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  },
+  "x25519": {
+   "sha256": "58a77cdc6b078e790e0cf0177d5fd43a3f0e1877465164639a320f3f11139c93",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  },
+  "xchacha20poly1305": {
+   "sha256": "e6b64fff5102615bb1e711efdd2c014d85a681620a5f9ba281bf435f3f42c44e",
+   "commit": "d6ca9a756d3d1e71489e61e44c04f33c3c893589",
+   "fork_commit": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind": "eb053e787735b1898fa64ebc91ae13b31db663ec",
+   "rind_bench": "rind",
+   "built": "2026-11-13 07:06 PST"
+  }
+ }
+}

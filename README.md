@@ -250,6 +250,11 @@ Recordings of the checks, builds, flashes and runs, the serial logs, charts, and
 rendered at 128x64 and 4x are in rind-results'
 [media/](https://github.com/steelhead99x/rind-results/tree/main/media).
 
+## Security
+
+See [SECURITY.md](SECURITY.md) to report a vulnerability in the firmware, the patches, or the xtask.
+A vulnerability in rind itself goes to [rind](https://github.com/kixel-ai/rind).
+
 ## License
 
 Like rind, everything here is licensed under any of **Apache-2.0, ISC, or MIT-0**, at your option;

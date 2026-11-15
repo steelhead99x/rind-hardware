@@ -264,6 +264,14 @@ fn now() -> u32 {
 
 /// Prints one `RB:` line. Each holds a JSON object.
 pub fn emit(json: &str) {
+    #[cfg(all(test, feature = "std"))]
+    {
+        let mut cap = CAPTURE.lock().unwrap();
+        if let Some(lines) = cap.as_mut() {
+            lines.push(json.to_string());
+            return;
+        }
+    }
     #[cfg(feature = "std")]
     {
         use std::io::Write;
@@ -276,6 +284,10 @@ pub fn emit(json: &str) {
         output(&format!("RB:{json}\n"));
     }
 }
+
+/// Lines captured by tests, instead of stdout. Production builds leave it empty.
+#[cfg(all(test, feature = "std"))]
+static CAPTURE: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
 #[cfg(not(feature = "std"))]
 static OUTPUT: Mutex<Option<fn(&str)>> = Mutex::new(None);
@@ -580,12 +592,7 @@ fn run<F: FnMut(&mut Bencher<'_>)>(id: String, throughput: Option<Throughput>, m
         ));
         return;
     };
-    cycles.sort_by(f64::total_cmp);
-    let n = cycles.len();
-    let pct = |p: f64| cycles[round((n - 1) as f64 * p) as usize];
-    let median = pct(0.5);
-    let mean = cycles.iter().sum::<f64>() / n as f64;
-    let var = cycles.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (n.max(2) - 1) as f64;
+    let stats = summarize(&mut cycles);
     let ns = |cyc: f64| cyc * 1e9 / config.cpu_hz as f64;
     let (tp, bytes) = match throughput {
         Some(Throughput::Bytes(b)) => (format!("{{\"Bytes\":{b}}}"), Some(b)),
@@ -593,9 +600,9 @@ fn run<F: FnMut(&mut Bencher<'_>)>(id: String, throughput: Option<Throughput>, m
         Some(Throughput::Elements(e)) => (format!("{{\"Elements\":{e}}}"), None),
         None => ("null".to_string(), None),
     };
-    let cpb = bytes
-        .filter(|&b| b > 0)
-        .map_or("null".to_string(), |b| format!("{:.3}", median / b as f64));
+    let cpb = bytes.filter(|&b| b > 0).map_or("null".to_string(), |b| {
+        format!("{:.3}", stats.median / b as f64)
+    });
     emit(&format!(
         concat!(
             "{{\"type\":\"result\",\"id\":{},\"ns\":{:.3},\"ns_low\":{:.3},\"ns_high\":{:.3},",
@@ -604,25 +611,56 @@ fn run<F: FnMut(&mut Bencher<'_>)>(id: String, throughput: Option<Throughput>, m
             "\"cycles_per_byte\":{},\"samples\":{},\"iters_per_sample\":{}{}}}"
         ),
         quote(&id),
-        ns(median),
-        ns(pct(0.05)),
-        ns(pct(0.95)),
+        ns(stats.median),
+        ns(stats.p5),
+        ns(stats.p95),
         tp,
-        median,
-        cycles[0],
-        pct(0.05),
-        pct(0.95),
-        cycles[n - 1],
-        mean,
-        sqrt(var),
+        stats.median,
+        stats.min,
+        stats.p5,
+        stats.p95,
+        stats.max,
+        stats.mean,
+        stats.stddev,
         cpb,
-        n,
+        stats.n,
         iters,
         wall.map_or(String::new(), |(w, c)| format!(
             ",\"wall_ns\":{w},\"sampled_cycles\":{c}"
         ))
     ));
-    observe(Event::Result(&id, ns(median)));
+    observe(Event::Result(&id, ns(stats.median)));
+}
+
+/// Per-iteration cycle counts, sorted, as one result line reports them.
+struct Stats {
+    n: usize,
+    min: f64,
+    p5: f64,
+    median: f64,
+    p95: f64,
+    max: f64,
+    mean: f64,
+    stddev: f64,
+}
+
+/// `cycles` is non-empty: a benchmark that took no samples does not get here.
+fn summarize(cycles: &mut [f64]) -> Stats {
+    cycles.sort_by(f64::total_cmp);
+    let n = cycles.len();
+    let pct = |p: f64| cycles[round((n - 1) as f64 * p) as usize];
+    let mean = cycles.iter().sum::<f64>() / n as f64;
+    let var = cycles.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (n.max(2) - 1) as f64;
+    Stats {
+        n,
+        min: cycles[0],
+        p5: pct(0.05),
+        median: pct(0.5),
+        p95: pct(0.95),
+        max: cycles[n - 1],
+        mean,
+        stddev: sqrt(var),
+    }
 }
 
 /// Defines a function running each target, as criterion's.
@@ -653,4 +691,257 @@ macro_rules! criterion_main {
             $( $group(); )+
         }
     };
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+    use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+
+    static HARNESS: Mutex<()> = Mutex::new(());
+    static TICK: AtomicU32 = AtomicU32::new(0);
+    static LISTED: AtomicUsize = AtomicUsize::new(0);
+    static WALL_NS: AtomicU64 = AtomicU64::new(0);
+
+    fn tick_clock() -> u32 {
+        TICK.load(Ordering::Relaxed)
+    }
+
+    fn advance(by: u32) {
+        TICK.fetch_add(by, Ordering::Relaxed);
+    }
+
+    fn wall_clock() -> u64 {
+        WALL_NS.fetch_add(250, Ordering::Relaxed)
+    }
+
+    fn on_listed(event: Event<'_>) {
+        if matches!(event, Event::Listed(_)) {
+            LISTED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Short enough that a test finishes in milliseconds, same shape as the
+    /// boards: at least `min_samples`, at most `samples`, each sample aiming
+    /// for `sample_cycles`.
+    fn tiny(samples: usize, min_samples: usize, max_measure_cycles: u64) -> Config {
+        Config {
+            cpu_hz: 1_000_000,
+            warm_up_cycles: 40,
+            sample_cycles: 20,
+            samples,
+            min_samples,
+            max_measure_cycles,
+        }
+    }
+
+    fn with_harness(config: Config, f: impl FnOnce()) -> Vec<String> {
+        let _guard = HARNESS.lock().unwrap_or_else(|e| e.into_inner());
+        set_filter(Vec::new());
+        *EXCLUDE.lock().unwrap() = Vec::new();
+        *OBSERVER.lock().unwrap() = None;
+        set_dry_run(false);
+        WALL.store(0, Ordering::Relaxed);
+        TICK.store(0, Ordering::Relaxed);
+        LISTED.store(0, Ordering::Relaxed);
+        WALL_NS.store(0, Ordering::Relaxed);
+        set_clock(tick_clock);
+        set_config(config);
+        *CAPTURE.lock().unwrap() = Some(Vec::new());
+        f();
+        CAPTURE.lock().unwrap().take().unwrap_or_default()
+    }
+
+    fn value(line: &str) -> serde_json::Value {
+        serde_json::from_str(line).unwrap_or_else(|e| panic!("{e} in {line}"))
+    }
+
+    #[test]
+    fn round_and_sqrt_match_the_statistics_the_lines_use() {
+        assert_eq!(round(0.5), 1.0);
+        assert_eq!(round(1.5), 2.0);
+        assert_eq!(round(0.49), 0.0);
+        assert_eq!(round(-0.5), -1.0);
+        assert_eq!(sqrt(0.0), 0.0);
+        assert_eq!(sqrt(-1.0), 0.0);
+        assert!((sqrt(11.0) - 11.0_f64.sqrt()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn percentiles_use_nearest_rank_on_the_sorted_samples() {
+        let mut cycles: Vec<f64> = (1..=11).map(f64::from).collect();
+        let s = summarize(&mut cycles);
+        assert_eq!(s.n, 11);
+        assert_eq!(s.min, 1.0);
+        assert_eq!(s.p5, 2.0);
+        assert_eq!(s.median, 6.0);
+        assert_eq!(s.p95, 11.0);
+        assert_eq!(s.max, 11.0);
+        assert_eq!(s.mean, 6.0);
+        assert!((s.stddev - 11.0_f64.sqrt()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn constant_cost_reports_median_cycles_and_nanoseconds() {
+        let lines = with_harness(tiny(11, 11, 10_000), || {
+            let mut c = Criterion::default();
+            c.bench_function("plain", |b| b.iter(|| advance(5)));
+        });
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let v = value(&lines[0]);
+        assert_eq!(v["type"], "result");
+        assert_eq!(v["id"], "plain");
+        assert_eq!(v["cycles"]["median"], 5.0);
+        assert_eq!(v["cycles"]["min"], 5.0);
+        assert_eq!(v["cycles"]["max"], 5.0);
+        assert_eq!(v["cycles"]["stddev"], 0.0);
+        assert_eq!(v["ns"], 5000.0);
+        assert_eq!(v["samples"], 11);
+        assert_eq!(v["iters_per_sample"], 4);
+        assert!(v["cycles_per_byte"].is_null());
+        assert!(v["throughput"].is_null());
+        assert!(v.get("wall_ns").is_none());
+    }
+
+    #[test]
+    fn sample_count_stays_inside_min_and_max() {
+        let capped = with_harness(tiny(7, 3, 1_000_000), || {
+            let mut c = Criterion::default();
+            c.bench_function("capped", |b| b.iter(|| advance(5)));
+        });
+        assert_eq!(value(&capped[0])["samples"], 7);
+
+        // One iteration already costs more than the measurement budget, so
+        // the count falls to min_samples instead of going below it.
+        let floored = with_harness(tiny(51, 11, 10_000), || {
+            let mut c = Criterion::default();
+            c.bench_function("floored", |b| b.iter(|| advance(1000)));
+        });
+        let v = value(&floored[0]);
+        assert_eq!(v["samples"], 11);
+        assert_eq!(v["cycles"]["median"], 1000.0);
+        assert_eq!(v["iters_per_sample"], 1);
+
+        let mid = with_harness(tiny(51, 11, 400), || {
+            let mut c = Criterion::default();
+            c.bench_function("mid", |b| b.iter(|| advance(5)));
+        });
+        assert_eq!(value(&mid[0])["samples"], 20);
+    }
+
+    #[test]
+    fn setup_is_outside_the_timed_section() {
+        let lines = with_harness(tiny(11, 11, 10_000), || {
+            let mut c = Criterion::default();
+            c.bench_function("batched", |b| {
+                b.iter_batched(|| advance(1000), |()| advance(3), BatchSize::PerIteration);
+            });
+        });
+        let v = value(&lines[0]);
+        assert_eq!(v["cycles"]["median"], 3.0);
+        assert_eq!(v["ns"], 3000.0);
+    }
+
+    #[test]
+    fn throughput_fills_cycles_per_byte_only_for_bytes() {
+        let lines = with_harness(tiny(11, 11, 10_000), || {
+            let mut c = Criterion::default();
+            let mut g = c.benchmark_group("sha256");
+            g.throughput(Throughput::Bytes(32));
+            g.bench_function("rind/32B", |b| b.iter(|| advance(5)));
+            g.throughput(Throughput::Elements(1));
+            g.bench_function("once", |b| b.iter(|| advance(5)));
+            g.throughput(Throughput::Bytes(0));
+            g.bench_function("empty", |b| b.iter(|| advance(5)));
+            g.finish();
+        });
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        let bytes = value(&lines[0]);
+        assert_eq!(bytes["id"], "sha256/rind/32B");
+        assert_eq!(bytes["throughput"]["Bytes"], 32);
+        assert!((bytes["cycles_per_byte"].as_f64().unwrap() - 5.0 / 32.0).abs() < 0.0006);
+        let elements = value(&lines[1]);
+        assert_eq!(elements["throughput"]["Elements"], 1);
+        assert!(elements["cycles_per_byte"].is_null());
+        assert!(value(&lines[2])["cycles_per_byte"].is_null());
+    }
+
+    #[test]
+    fn wall_clock_records_the_sample_window_and_the_counted_cycles() {
+        let lines = with_harness(tiny(11, 11, 10_000), || {
+            set_wall_clock(wall_clock);
+            let mut c = Criterion::default();
+            c.bench_function("walled", |b| b.iter(|| advance(5)));
+        });
+        let v = value(&lines[0]);
+        assert_eq!(v["wall_ns"], 250);
+        assert_eq!(v["sampled_cycles"], 220);
+        assert_eq!(v["cycles"]["median"], 5.0);
+    }
+
+    #[test]
+    fn filter_exclude_and_a_missing_iter_skip_without_a_time() {
+        let lines = with_harness(tiny(11, 11, 10_000), || {
+            set_filter(vec![
+                "keep/".into(),
+                "aes128-gcm".into(),
+                "sha256/".into(),
+                "quiet".into(),
+            ]);
+            exclude("aes128-gcm", "ring");
+            let mut c = Criterion::default();
+            c.bench_function("drop/no", |b| b.iter(|| advance(5)));
+            c.bench_function("keep/yes", |b| b.iter(|| advance(5)));
+            c.bench_function("aes128-gcm/ring/32B", |b| b.iter(|| advance(5)));
+            c.bench_function("aes128-gcm/rind/32B", |b| b.iter(|| advance(5)));
+            c.bench_function("sha256/ring/64B", |b| b.iter(|| advance(5)));
+            c.bench_function("quiet", |_| {});
+        });
+        let rows: Vec<(String, String)> = lines
+            .iter()
+            .map(|l| {
+                let v = value(l);
+                (
+                    v["type"].as_str().unwrap().to_string(),
+                    v["id"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("result".into(), "keep/yes".into()),
+                ("skipped".into(), "aes128-gcm/ring/32B".into()),
+                ("result".into(), "aes128-gcm/rind/32B".into()),
+                ("result".into(), "sha256/ring/64B".into()),
+                ("skipped".into(), "quiet".into()),
+            ]
+        );
+        assert!(lines[1].contains("failed a known-answer check"));
+        assert!(lines[4].contains("no iter call"));
+    }
+
+    #[test]
+    fn ids_are_json_strings() {
+        let lines = with_harness(tiny(11, 11, 10_000), || {
+            let mut c = Criterion::default();
+            c.bench_function("a\"b\\c\u{1}", |b| b.iter(|| advance(5)));
+        });
+        assert_eq!(value(&lines[0])["id"], "a\"b\\c\u{1}");
+    }
+
+    #[test]
+    fn dry_run_lists_the_id_and_does_not_run_the_body() {
+        let lines = with_harness(tiny(11, 11, 10_000), || {
+            set_dry_run(true);
+            set_observer(on_listed);
+            let mut c = Criterion::default();
+            c.bench_function("counted", |_| advance(5));
+            exclude("counted", "counted");
+            c.bench_function("counted", |_| advance(5));
+        });
+        assert!(lines.is_empty(), "{lines:?}");
+        assert_eq!(LISTED.load(Ordering::Relaxed), 1);
+        assert_eq!(TICK.load(Ordering::Relaxed), 0);
+    }
 }

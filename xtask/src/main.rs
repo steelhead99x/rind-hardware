@@ -7,7 +7,9 @@
 //! `rp2040/env.sh` set up. Those stay shell, sourced before each cargo call,
 //! since that environment is the toolchains' own export scripts. Their
 //! exports are applied with `Command::env`; the commands are argument lists.
+//! `lint-log` checks a captured `RB:` log on the host, with no toolchain.
 
+mod loglint;
 mod pbm;
 mod uf2;
 
@@ -60,9 +62,10 @@ enum Board {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// rind's contribution checks: rustfmt (style_edition 2024) and clippy with
-    /// warnings denied, for every image, the display build and examples, the
-    /// nRF52840 and RP2040 images, the display UI on the host and this tool
+    /// rind's contribution checks: rustfmt (style_edition 2024), clippy with
+    /// warnings denied, and the host tests (this tool and criterion-esp),
+    /// then every image, the display build and examples, and the nRF52840
+    /// and RP2040 images
     Check {
         /// check from empty target directories (target-check/, deleted
         /// first), so no cached clippy result can hide a warning
@@ -142,6 +145,20 @@ enum Cmd {
     OledMedia { tsv: PathBuf, out: PathBuf },
     /// repro/xtensa-overalign: does `takes_stack_arg` move a1 after `entry` without movsp?
     ReproOveralign,
+    /// Check a serial log or RB JSONL against the firmware's timing contract.
+    ///
+    /// Boot noise around `RB:` lines is ignored, and so is the difference
+    /// between that prefix and the JSONL rind-results stores. A bench run
+    /// has to start on `start` and end on `done`. Cycle statistics have to
+    /// match `cpu_hz`. An ESP32-S3 `clock` record has to agree with that
+    /// rate, and an RP2040 `check_cycles`/`check_us` pair has to agree, so a
+    /// dropped 24-bit SysTick wrap fails the run. A library that failed a
+    /// known-answer check must not have a result for that operation.
+    LintLog {
+        /// serial logs or JSONL files
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
 }
 
 fn hex(s: &str) -> Result<u32, String> {
@@ -419,6 +436,31 @@ fn check(clean: bool) -> Result<(), String> {
         &["+stable", "clippy", "--all-targets", "--", "-D", "warnings"],
         &tdir("demo/oled-ui"),
     )?;
+    println!("== clippy oled-ui: ok");
+    run(
+        &r.join("xtask"),
+        None,
+        "cargo",
+        &["+stable", "test", "--quiet"],
+        &tdir("xtask"),
+    )?;
+    println!("== test xtask: ok");
+    run(
+        &r.join("criterion-esp"),
+        None,
+        "cargo",
+        &["+stable", "clippy", "--all-targets", "--", "-D", "warnings"],
+        &tdir("criterion-esp"),
+    )?;
+    println!("== clippy criterion-esp: ok");
+    run(
+        &r.join("criterion-esp"),
+        None,
+        "cargo",
+        &["+stable", "test", "--quiet"],
+        &tdir("criterion-esp"),
+    )?;
+    println!("== test criterion-esp: ok");
     // The firmware images compile the rind submodule. A dirty or unpatched
     // tree would make the clippy result unreproducible.
     require_rind_tree(None)?;
@@ -1426,6 +1468,46 @@ fn repro_overalign() -> Result<(), String> {
     Ok(())
 }
 
+fn lint_log(files: &[PathBuf]) -> Result<(), String> {
+    let mut problems = String::new();
+    for path in files {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let report = loglint::lint(&text);
+        if report.ok() {
+            for run in &report.runs {
+                println!(
+                    "{}:{}: {} @ {} Hz, {} results, {} checks ({} failed)",
+                    path.display(),
+                    run.line,
+                    run.chip,
+                    run.cpu_hz,
+                    run.results,
+                    run.checks,
+                    run.checks_failed
+                );
+            }
+        } else {
+            for issue in &report.issues {
+                if issue.line == 0 {
+                    problems.push_str(&format!("{}: {}\n", path.display(), issue.message));
+                } else {
+                    problems.push_str(&format!(
+                        "{}:{}: {}\n",
+                        path.display(),
+                        issue.line,
+                        issue.message
+                    ));
+                }
+            }
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
 fn main() -> ExitCode {
     let r = match Cli::parse().cmd {
         Cmd::Check { clean } => check(clean),
@@ -1454,6 +1536,7 @@ fn main() -> ExitCode {
         Cmd::Pbm2text { files } => files.iter().try_for_each(|f| pbm::to_text(f).map(|s| print!("{s}"))),
         Cmd::OledMedia { tsv, out } => oled_media(&tsv, &out),
         Cmd::ReproOveralign => repro_overalign(),
+        Cmd::LintLog { files } => lint_log(&files),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,

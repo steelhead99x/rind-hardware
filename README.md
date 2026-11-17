@@ -24,7 +24,7 @@ repo holds only the firmware and the upstream-ready port.
 | Path | What it is | Upstream? |
 |---|---|---|
 | `rind/` | Submodule: upstream [`kixel-ai/rind`](https://github.com/kixel-ai/rind) (`moq-dev/rind` redirects), pinned at `d6ca9a75` (OPRF, 2026-11-13) | upstream |
-| `patches/` | `git format-patch` series that `apply-patches` commits onto the submodule. Base patches `0001`–`0005` are required. Optional sets live in `patches/<name>/`, numbered from `0001` in that directory, and are applied with `--set <name>`. Ring vendor patches are unnumbered | **the upstream PR** |
+| `patches/` | `git format-patch` series that `apply-patches` commits onto the submodule. Base patches `0001`–`0006` are required. Optional sets live in `patches/<name>/`, numbered from `0001` in that directory, and are applied with `--set <name>`. Ring vendor patches are unnumbered | **the upstream PR** |
 | `nrf52840/` | The nRF52840 (T1000-E) firmware, `thumbv7em-none-eabihf` | [nrf52840/README.md](nrf52840/README.md) |
 | `rp2040/` | The RP2040 (Pico) firmware, `thumbv6m-none-eabi`; builds; known-answer checks passed on a Pico | [rp2040/README.md](rp2040/README.md) |
 | `xtask/` | The tooling, `cargo xtask <command>` from the root: `apply-patches` (commits the series on the submodule branch `hardware/applied`; idempotent; `--set` / `--reverse`), `vendor-ring`, `build-images` and `provenance` (both refuse a dirty rind tree), `check`, `uf2`, `pbm2png`, `pbm2text`, `oled-media`, `repro-overalign` | no |
